@@ -7,6 +7,7 @@ import { TemplateEngine } from "./TemplateEngine.js";
 export interface PromptContext {
   readonly instance: number;
   readonly total: number;
+  readonly feature: string;
   readonly notesDir: string;
   readonly repoDir: string;
   readonly ticketId: string | null;
@@ -45,6 +46,7 @@ export class PromptBuilder {
       blueprint.execution.prompt_template,
       {
         skill_content: skillContent,
+        feature: context.feature,
         instance: String(context.instance),
         total: String(context.total),
         notes_dir: context.notesDir,

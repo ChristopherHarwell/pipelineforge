@@ -634,6 +634,7 @@ export class DagExecutor {
     return {
       instance: node.instance,
       total,
+      feature: state.feature,
       notesDir: state.notes_dir,
       repoDir: state.repo_dir,
       ticketId: this.extractTicketId(node),
