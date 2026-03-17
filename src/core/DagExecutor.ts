@@ -620,7 +620,7 @@ export class DagExecutor {
       if (depState !== undefined && depState.output !== null) {
         stepOutputs[depId] = {
           outputs: {
-            output: depState.output,
+            output: this.extractClaudeResult(depState.output),
             exit_code: depState.exit_code,
           },
         };
@@ -643,6 +643,41 @@ export class DagExecutor {
 
   private extractTicketId(node: DagNode): string {
     return `${node.blueprint}-${String(node.instance)}`;
+  }
+
+  // ── Output Sanitization ─────────────────────────────────────────────
+  // Docker multiplexed streams prepend 8-byte headers (stream type +
+  // payload length) to each frame. The Claude CLI JSON output lives
+  // inside these frames. Strip the binary prefix and extract the
+  // human-readable `result` field from the Claude JSON response.
+
+  private extractClaudeResult(rawOutput: string): string {
+    // Strip Docker multiplexed stream header bytes (non-printable prefix)
+    const cleaned: string = rawOutput.replace(/^[\x00-\x08]+/, "");
+
+    // Try to parse as Claude CLI JSON and extract the result field
+    const jsonStart: number = cleaned.indexOf("{");
+    if (jsonStart === -1) {
+      return cleaned;
+    }
+
+    try {
+      const parsed: unknown = JSON.parse(cleaned.slice(jsonStart));
+      if (
+        parsed !== null &&
+        typeof parsed === "object" &&
+        "result" in parsed
+      ) {
+        const result: unknown = (parsed as Record<string, unknown>)["result"];
+        if (typeof result === "string") {
+          return result;
+        }
+      }
+    } catch {
+      // Not valid JSON — return cleaned output as-is
+    }
+
+    return cleaned;
   }
 
   // ── Log Event Helper ────────────────────────────────────────────────
