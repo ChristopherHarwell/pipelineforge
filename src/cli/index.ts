@@ -167,6 +167,8 @@ program
     const stateManager: StateManager = new StateManager(opts.stateDir);
     await stateManager.save(initialState);
 
+    const logger: PipelineLogger = new ConsoleLogger();
+
     const dockerManager: DockerManager = new DockerManager({
       pipelineId,
       imageName: opts.image,
@@ -174,7 +176,7 @@ program
       repoDir,
       notesDir,
       stateDir: opts.stateDir,
-    });
+    }, logger);
 
     const gateEvaluator: GateEvaluator = new GateEvaluator();
 
@@ -192,6 +194,7 @@ program
       stateManager,
       worktreeManager,
       promptBuilder,
+      logger,
       { maxConcurrent, reviewTiming },
     );
 
