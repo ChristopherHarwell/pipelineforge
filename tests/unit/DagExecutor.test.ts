@@ -8,6 +8,8 @@ import type { GateEvaluation } from "../../src/core/GateEvaluator.js";
 import type { GateResult } from "../../src/types/Gate.js";
 import type { WorktreeInfo, MergeResult } from "../../src/core/WorktreeManager.js";
 import type { PromptContext } from "../../src/utils/PromptBuilder.js";
+import type { PipelineLogger } from "../../src/types/Logger.js";
+import { NoopLogger } from "../../src/utils/NoopLogger.js";
 import {
   createContainerResult,
   createNodeState,
@@ -188,12 +190,15 @@ function createExecutorScenario(
     ...configOverrides,
   });
 
+  const logger: PipelineLogger = new NoopLogger();
+
   const executor: DagExecutor = new DagExecutor(
     dockerManager as never,
     gateEvaluator as never,
     stateManager as never,
     worktreeManager as never,
     promptBuilder as never,
+    logger,
     config,
   );
 
