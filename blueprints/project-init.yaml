@@ -1,6 +1,6 @@
 name: project-init
 description: "Create Technical Requirements Document from feature description"
-skill_path: "./skills/project-init/SKILL.md"
+skill_path: "~/.claude/skills/project-init/SKILL.md"
 execution:
   prompt_template: |
     {{ .skill_content }}

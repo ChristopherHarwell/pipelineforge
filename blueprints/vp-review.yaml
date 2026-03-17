@@ -1,6 +1,6 @@
 name: vp-review
 description: "VP of Engineering executive review"
-skill_path: "./skills/vp-review/SKILL.md"
+skill_path: "~/.claude/skills/vp-review/SKILL.md"
 execution:
   prompt_template: |
     {{ .skill_content }}

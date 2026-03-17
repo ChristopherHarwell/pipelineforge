@@ -1,6 +1,6 @@
 name: assign-tickets
 description: "Break feature into implementable tickets from TRD"
-skill_path: "./skills/assign-tickets/SKILL.md"
+skill_path: "~/.claude/skills/assign-tickets/SKILL.md"
 execution:
   prompt_template: |
     {{ .skill_content }}

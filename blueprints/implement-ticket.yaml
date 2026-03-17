@@ -1,6 +1,6 @@
 name: implement-ticket
 description: "Implement a single ticket using TDD"
-skill_path: "./skills/implement-ticket/SKILL.md"
+skill_path: "~/.claude/skills/implement-ticket/SKILL.md"
 execution:
   prompt_template: |
     {{ .skill_content }}

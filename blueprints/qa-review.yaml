@@ -1,6 +1,6 @@
 name: qa-review
 description: "QA review of implementation"
-skill_path: "./skills/qa-review/SKILL.md"
+skill_path: "~/.claude/skills/qa-review/SKILL.md"
 execution:
   prompt_template: |
     {{ .skill_content }}

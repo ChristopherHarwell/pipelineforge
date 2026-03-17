@@ -1,6 +1,6 @@
 name: staff-review
 description: "Staff Engineer final technical review"
-skill_path: "./skills/staff-review/SKILL.md"
+skill_path: "~/.claude/skills/staff-review/SKILL.md"
 execution:
   prompt_template: |
     {{ .skill_content }}

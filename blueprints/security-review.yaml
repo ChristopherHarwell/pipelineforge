@@ -1,6 +1,6 @@
 name: security-review
 description: "Security review of implementation"
-skill_path: "./skills/security-review/SKILL.md"
+skill_path: "~/.claude/skills/security-review/SKILL.md"
 execution:
   prompt_template: |
     {{ .skill_content }}
