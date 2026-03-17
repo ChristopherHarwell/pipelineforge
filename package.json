@@ -1,0 +1,35 @@
+{
+  "name": "pipelineforge",
+  "version": "1.0.0",
+  "description": "DAG-based SDLC pipeline orchestrator using Claude Code in Docker",
+  "type": "module",
+  "main": "dist/cli/index.js",
+  "bin": {
+    "pipelineforge": "dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^13.1.0",
+    "dockerode": "^4.0.4",
+    "js-yaml": "^4.1.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/dockerode": "^3.3.34",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.9"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
