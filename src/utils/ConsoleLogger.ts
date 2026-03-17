@@ -3,7 +3,7 @@
 // with node-prefixed lines and live container output streaming.
 
 import type { Readable } from "node:stream";
-import { createInterface } from "node:readline";
+import { createInterface, type Interface } from "node:readline";
 import type {
   PipelineLogger,
   LogLevel,
@@ -65,7 +65,7 @@ export class ConsoleLogger implements PipelineLogger {
     stream: Readable,
   ): void {
     const icon: string = NODE_ICONS["streaming"] ?? "│";
-    const rl = createInterface({ input: stream });
+    const rl: Interface = createInterface({ input: stream });
 
     rl.on("line", (line: string): void => {
       process.stdout.write(`  ${icon} ${nodeId}: ${line}\n`);
