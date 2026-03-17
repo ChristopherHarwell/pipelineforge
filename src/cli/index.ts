@@ -266,6 +266,8 @@ program
     );
 
     // ── Rebuild executor ────────────────────────────────────────
+    const resumeLogger: PipelineLogger = new ConsoleLogger();
+
     const dockerManager: DockerManager = new DockerManager({
       pipelineId: opts.id,
       imageName: opts.image,
@@ -273,7 +275,7 @@ program
       repoDir: state.repo_dir,
       notesDir: state.notes_dir,
       stateDir: opts.stateDir,
-    });
+    }, resumeLogger);
 
     const executor: DagExecutor = new DagExecutor(
       dockerManager,
@@ -281,6 +283,7 @@ program
       stateManager,
       new WorktreeManager({ repoDir: state.repo_dir, pipelineId: opts.id }),
       new PromptBuilder(new TemplateEngine()),
+      resumeLogger,
       {
         maxConcurrent: pipelineConfig.defaults.max_concurrent_containers,
         reviewTiming: state.review_timing,
@@ -372,6 +375,8 @@ program
     );
 
     // ── Rebuild executor ────────────────────────────────────────
+    const retryLogger: PipelineLogger = new ConsoleLogger();
+
     const dockerManager: DockerManager = new DockerManager({
       pipelineId: opts.id,
       imageName: opts.image,
@@ -379,7 +384,7 @@ program
       repoDir: resetState.repo_dir,
       notesDir: resetState.notes_dir,
       stateDir: opts.stateDir,
-    });
+    }, retryLogger);
 
     const executor: DagExecutor = new DagExecutor(
       dockerManager,
@@ -387,6 +392,7 @@ program
       stateManager,
       new WorktreeManager({ repoDir: resetState.repo_dir, pipelineId: opts.id }),
       new PromptBuilder(new TemplateEngine()),
+      retryLogger,
       {
         maxConcurrent: pipelineConfig.defaults.max_concurrent_containers,
         reviewTiming: resetState.review_timing,
