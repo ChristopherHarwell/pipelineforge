@@ -1,0 +1,17 @@
+name: full-sdlc
+description: "Full SDLC pipeline: requirements → tickets → implementation → review"
+blueprints:
+  - project-init
+  - assign-tickets
+  - implement-ticket
+  - qa-review
+  - security-review
+  - staff-review
+  - vp-review
+defaults:
+  model: sonnet
+  timeout_minutes: 15
+  max_concurrent_containers: 20
+human_gates:
+  - after: staff-review
+  - after: vp-review
