@@ -247,16 +247,16 @@ export class DockerManager {
 
     if (this.logger !== null) {
       try {
-        const rawStream = await container.logs({
+        const rawStream: NodeJS.ReadableStream = await container.logs({
           stdout: true,
           stderr: true,
           follow: true,
-        });
+        }) as unknown as NodeJS.ReadableStream;
 
         // dockerode returns a multiplexed stream — pipe through
         // a PassThrough to normalize into a standard Readable
         const passthrough: PassThrough = new PassThrough();
-        (rawStream as unknown as NodeJS.ReadableStream).pipe(passthrough);
+        rawStream.pipe(passthrough);
 
         // Capture output for the final ContainerResult
         passthrough.on("data", (chunk: Buffer): void => {
@@ -274,7 +274,7 @@ export class DockerManager {
     }
 
     try {
-      const waitResult = await Promise.race([
+      const waitResult: { readonly StatusCode: number } = await Promise.race([
         container.wait(),
         timeoutPromise,
       ]);
