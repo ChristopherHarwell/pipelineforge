@@ -25,6 +25,8 @@ import { WorktreeManager } from "../core/WorktreeManager.js";
 import { PromptBuilder } from "../utils/PromptBuilder.js";
 import { TemplateEngine } from "../utils/TemplateEngine.js";
 import { loadPipelineConfig } from "../core/PipelineConfigLoader.js";
+import { ConsoleLogger } from "../utils/ConsoleLogger.js";
+import type { PipelineLogger } from "../types/Logger.js";
 
 const execFileAsync: typeof execFile.__promisify__ = promisify(execFile);
 
