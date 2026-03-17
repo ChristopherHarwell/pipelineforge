@@ -1,0 +1,24 @@
+name: vp-review
+description: "VP of Engineering executive review"
+skill_path: "./skills/vp-review/SKILL.md"
+execution:
+  prompt_template: |
+    {{ .skill_content }}
+
+    ## Repository
+    {{ .repo_dir }}
+
+    ## Notes
+    {{ .notes_dir }}
+  model: opus
+  max_turns: 50
+  timeout_minutes: 10
+  allowed_tools:
+    - Read
+    - Glob
+    - Grep
+  output_format: json
+depends_on:
+  - staff-review
+gate:
+  type: human

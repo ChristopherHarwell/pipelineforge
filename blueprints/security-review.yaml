@@ -1,0 +1,35 @@
+name: security-review
+description: "Security review of implementation"
+skill_path: "./skills/security-review/SKILL.md"
+execution:
+  prompt_template: |
+    {{ .skill_content }}
+
+    ## Review Target
+    You are Security reviewer {{ .instance }} of {{ .total }}.
+
+    ## Repository
+    {{ .repo_dir }}
+
+    ## Notes
+    {{ .notes_dir }}
+  model: sonnet
+  max_turns: 50
+  timeout_minutes: 10
+  allowed_tools:
+    - Read
+    - Glob
+    - Grep
+  output_format: json
+parallel:
+  instances: 3
+  naming: "{name}-{i}"
+depends_on:
+  - qa-review
+gate:
+  type: approval
+  required: 3
+  total: 3
+  approval_marker: "APPROVED"
+  rejection_marker: "REJECTED"
+  rejection_routes_to: implement-ticket

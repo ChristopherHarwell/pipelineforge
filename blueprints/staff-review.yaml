@@ -1,0 +1,25 @@
+name: staff-review
+description: "Staff Engineer final technical review"
+skill_path: "./skills/staff-review/SKILL.md"
+execution:
+  prompt_template: |
+    {{ .skill_content }}
+
+    ## Repository
+    {{ .repo_dir }}
+
+    ## Notes
+    {{ .notes_dir }}
+  model: opus
+  max_turns: 80
+  timeout_minutes: 15
+  allowed_tools:
+    - Read
+    - Glob
+    - Grep
+    - Bash
+  output_format: json
+depends_on:
+  - security-review
+gate:
+  type: human

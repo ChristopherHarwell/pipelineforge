@@ -1,0 +1,28 @@
+name: project-init
+description: "Create Technical Requirements Document from feature description"
+skill_path: "./skills/project-init/SKILL.md"
+execution:
+  prompt_template: |
+    {{ .skill_content }}
+
+    ## Feature
+    {{ .feature }}
+
+    ## Output Directory
+    Write all documents to: {{ .notes_dir }}
+  model: opus
+  max_turns: 100
+  timeout_minutes: 20
+  allowed_tools:
+    - Read
+    - Write
+    - Glob
+    - Grep
+    - Bash
+  output_format: json
+gate:
+  type: quality
+  quality_checks:
+    - check: exit_code
+outputs:
+  trd_path: "{{ .notes_dir }}/TRD.md"

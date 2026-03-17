@@ -1,0 +1,41 @@
+name: implement-ticket
+description: "Implement a single ticket using TDD"
+skill_path: "./skills/implement-ticket/SKILL.md"
+execution:
+  prompt_template: |
+    {{ .skill_content }}
+
+    ## Ticket
+    You are instance {{ .instance }} of {{ .total }}.
+    Ticket ID: {{ .ticket_id }}
+
+    ## Repository
+    {{ .repo_dir }}
+
+    ## Notes
+    {{ .notes_dir }}
+  model: sonnet
+  max_turns: 200
+  timeout_minutes: 30
+  allowed_tools:
+    - Read
+    - Write
+    - Edit
+    - Glob
+    - Grep
+    - Bash
+  output_format: json
+parallel:
+  instances: 3
+  naming: "{name}-{i}"
+depends_on:
+  - assign-tickets
+gate:
+  type: quality
+  quality_checks:
+    - check: exit_code
+    - check: tests_pass
+review_mode:
+  enabled: true
+outputs:
+  branch: "pf-implement-{{ .ticket_id }}"
