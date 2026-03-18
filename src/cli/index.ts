@@ -2,6 +2,7 @@
 
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
+import { mkdir } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
@@ -76,7 +77,7 @@ program
     "Notes output directory",
     process.env["PIPELINEFORGE_NOTES_DIR"],
   )
-  .option("--repo-dir <path>", "Project repo directory", process.cwd())
+  .option("--repo-dir <path>", "Target project repo directory (created if it does not exist)")
   .option("--max-concurrent <n>", "Max concurrent containers", "20")
   .option(
     "--review-timing <timing>",
@@ -91,7 +92,7 @@ program
     readonly feature: string;
     readonly pipeline: string;
     readonly notesDir: string | undefined;
-    readonly repoDir: string;
+    readonly repoDir: string | undefined;
     readonly maxConcurrent: string;
     readonly reviewTiming: string;
     readonly blueprintsDir: string;
@@ -100,7 +101,13 @@ program
     readonly image: string;
   }): Promise<void> => {
     const pipelineId: string = randomUUID().slice(0, 8);
-    const repoDir: string = resolve(opts.repoDir);
+    const repoDir: string = opts.repoDir !== undefined
+      ? resolve(opts.repoDir)
+      : resolve(opts.stateDir, pipelineId, "repo");
+
+    // Auto-create the target repo directory if it does not exist
+    await mkdir(repoDir, { recursive: true });
+
     const notesDir: string = opts.notesDir !== undefined
       ? resolve(opts.notesDir)
       : resolve(opts.stateDir, pipelineId, "notes");
