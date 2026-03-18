@@ -62,6 +62,7 @@ export class DockerManager {
       blueprint,
       worktreePath,
     );
+    const workingDir: string = blueprint.requires_repo ? "/workspace" : "/notes";
     const env: ReadonlyArray<string> = this.buildEnv(node, blueprint);
 
     // Dynamically import dockerode to allow testing without Docker
@@ -77,7 +78,7 @@ export class DockerManager {
         Memory: this.parseMemory(blueprint.docker?.memory ?? "2g"),
         NanoCpus: this.parseCpus(blueprint.docker?.cpus ?? "1.0"),
       },
-      WorkingDir: "/workspace",
+      WorkingDir: workingDir,
       Env: [...env],
     });
 
@@ -184,14 +185,18 @@ export class DockerManager {
       `${this.config.stateDir}:/state:ro`,
     ];
 
-    if (worktreePath !== undefined) {
-      // Worktree mode: worktree is /workspace (rw), main repo is /repo (ro)
-      mounts.push(`${worktreePath}:/workspace:rw`);
-      mounts.push(`${this.config.repoDir}:/repo:ro`);
-    } else {
-      // Standard mode: main repo is /workspace (rw)
-      mounts.push(`${this.config.repoDir}:/workspace:rw`);
+    if (blueprint.requires_repo) {
+      if (worktreePath !== undefined) {
+        // Worktree mode: worktree is /workspace (rw), main repo is /repo (ro)
+        mounts.push(`${worktreePath}:/workspace:rw`);
+        mounts.push(`${this.config.repoDir}:/repo:ro`);
+      } else {
+        // Standard mode: main repo is /workspace (rw)
+        mounts.push(`${this.config.repoDir}:/workspace:rw`);
+      }
     }
+    // Planning-only blueprints (requires_repo: false) get no repo mount —
+    // they work entirely within /notes
 
     if (blueprint.docker?.extra_mounts !== undefined) {
       mounts.push(...blueprint.docker.extra_mounts);
