@@ -9,7 +9,7 @@ export interface PromptContext {
   readonly total: number;
   readonly feature: string;
   readonly notesDir: string;
-  readonly repoDir: string;
+  readonly repoDir: string | null;
   readonly ticketId: string | null;
   readonly stepOutputs: Record<string, unknown>;
 }
@@ -51,7 +51,7 @@ export class PromptBuilder {
         instance: String(context.instance),
         total: String(context.total),
         notes_dir: context.notesDir,
-        repo_dir: context.repoDir,
+        repo_dir: context.repoDir ?? "",
         ticket_id: context.ticketId ?? "",
         Steps: context.stepOutputs,
       },
