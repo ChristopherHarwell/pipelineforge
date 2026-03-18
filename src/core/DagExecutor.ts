@@ -264,7 +264,7 @@ export class DagExecutor {
   ): Promise<NodeOutcome> {
     const prompt: string = await this.promptBuilder.buildPrompt(
       blueprint,
-      this.buildContext(node, state),
+      this.buildContext(node, state, blueprint),
     );
 
     const result: ContainerResult = await this.dockerManager.spawnContainer({
@@ -355,7 +355,7 @@ export class DagExecutor {
   ): Promise<NodeOutcome> {
     const prompt: string = await this.promptBuilder.buildPrompt(
       blueprint,
-      this.buildContext(node, state),
+      this.buildContext(node, state, blueprint),
     );
 
     const result: ContainerResult = await this.dockerManager.spawnContainer({
@@ -401,7 +401,7 @@ export class DagExecutor {
 
     const prompt: string = await this.promptBuilder.buildPrompt(
       blueprint,
-      this.buildContext(node, state),
+      this.buildContext(node, state, blueprint),
     );
 
     const result: ContainerResult = await this.dockerManager.spawnContainer({
@@ -611,6 +611,7 @@ export class DagExecutor {
   private buildContext(
     node: DagNode,
     state: PipelineState,
+    blueprint: Blueprint,
   ): PromptContext {
     const stepOutputs: Record<string, unknown> = {};
     for (const depId of node.dependencies) {
@@ -636,7 +637,7 @@ export class DagExecutor {
       total,
       feature: state.feature,
       notesDir: state.notes_dir,
-      repoDir: state.repo_dir,
+      repoDir: blueprint.requires_repo ? state.repo_dir : null,
       ticketId: this.extractTicketId(node),
       stepOutputs,
     };
