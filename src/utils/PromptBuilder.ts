@@ -37,9 +37,10 @@ export class PromptBuilder {
     blueprint: Blueprint,
     context: PromptContext,
   ): Promise<string> {
-    // 1. Read the SKILL.md file
+    // 1. Read the SKILL.md file and strip YAML frontmatter
     const skillPath: string = this.expandPath(blueprint.skill_path);
-    const skillContent: string = await readFile(skillPath, "utf-8");
+    const rawSkillContent: string = await readFile(skillPath, "utf-8");
+    const skillContent: string = this.stripFrontmatter(rawSkillContent);
 
     // 2. Render the prompt template with variable substitution
     const rendered: string = this.templateEngine.render(
@@ -57,6 +58,32 @@ export class PromptBuilder {
     );
 
     return rendered;
+  }
+
+  /**
+   * Strip YAML frontmatter (delimited by `---`) from skill file content.
+   * SKILL.md files use frontmatter for Claude Code skill metadata (name,
+   * description, allowed-tools, etc.) which is not part of the prompt.
+   * Passing `---` to `claude -p` causes it to be interpreted as a flag.
+   *
+   * @param content - Raw SKILL.md file content
+   * @returns Content with frontmatter stripped
+   */
+  private stripFrontmatter(content: string): string {
+    const trimmed: string = content.trimStart();
+    if (!trimmed.startsWith("---")) {
+      return content;
+    }
+
+    // Find the closing `---` delimiter after the opening one
+    const closingIndex: number = trimmed.indexOf("---", 3);
+    if (closingIndex === -1) {
+      return content;
+    }
+
+    // Return everything after the closing delimiter, trimmed of leading newlines
+    const afterFrontmatter: string = trimmed.slice(closingIndex + 3);
+    return afterFrontmatter.replace(/^\n+/, "");
   }
 
   /**
