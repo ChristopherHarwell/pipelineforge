@@ -160,6 +160,7 @@ export function createBlueprint(
     gate: { type: "quality" as const },
     outputs: {},
     review_mode: { enabled: false, dry_run_disallowed_tools: ["Edit", "Write", "NotebookEdit"] },
+    requires_repo: true,
     ...overrides,
   });
 }

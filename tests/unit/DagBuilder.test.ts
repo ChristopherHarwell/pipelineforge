@@ -27,6 +27,8 @@ function createBlueprint(
     depends_on: [],
     gate: { type: "quality" },
     outputs: {},
+    review_mode: { enabled: false, dry_run_disallowed_tools: ["Edit", "Write", "NotebookEdit"] },
+    requires_repo: true,
     ...overrides,
   };
 }
