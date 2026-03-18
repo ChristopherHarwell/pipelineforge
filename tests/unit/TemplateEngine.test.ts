@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { TemplateEngine } from "../../src/utils/TemplateEngine.js";
+import { TemplateEngine } from "@utils/TemplateEngine.ts";
 
 // ===========================================================================
 // TemplateEngine

@@ -1,14 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { GateEvaluator } from "../../src/core/GateEvaluator.js";
-import type { GateEvaluation } from "../../src/core/GateEvaluator.js";
-import type { TransitionEvent } from "../../src/core/NodeFSM.js";
-import type { Gate } from "../../src/types/Blueprint.js";
-import type { GateResult } from "../../src/types/Gate.js";
+import { GateEvaluator } from "@core/GateEvaluator.ts";
+import type { GateEvaluation } from "@core/GateEvaluator.ts";
+import type { TransitionEvent } from "@core/NodeFSM.ts";
+import type { Gate } from "@pftypes/Blueprint.ts";
+import type { GateResult } from "@pftypes/Gate.ts";
 import type {
   ContainerResult,
   NodeState,
   PipelineState,
-} from "../../src/types/Pipeline.js";
+} from "@pftypes/Pipeline.ts";
 import {
   createContainerResult,
   createNodeState,

@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { WorktreeManager } from "../../src/core/WorktreeManager.js";
+import { WorktreeManager } from "@core/WorktreeManager.ts";
 import type {
   WorktreeConfig,
   WorktreeInfo,
   MergeResult,
-} from "../../src/core/WorktreeManager.js";
+} from "@core/WorktreeManager.ts";
 import { createStableTestId } from "../utils/mock-data.js";
 
 // ===========================================================================

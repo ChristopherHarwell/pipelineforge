@@ -1,5 +1,5 @@
-import { deepFreeze } from "../utils/deepfreeze.js";
-import type { DeepReadonly } from "../utils/deepfreeze.js";
+import { deepFreeze } from "@utils/deepfreeze.ts";
+import type { DeepReadonly } from "@utils/deepfreeze.ts";
 
 // ── Detection Result ─────────────────────────────────────────────────
 

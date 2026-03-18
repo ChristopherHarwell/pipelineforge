@@ -3,7 +3,7 @@ import type {
   DiscordMessageId,
   DiscordNotification,
   DiscordResponse,
-} from "./Discord.js";
+} from "@pftypes/Discord.ts";
 
 // ── Notification Channel Interface ───────────────────────────────────
 // Abstraction over the notification delivery mechanism. Production uses

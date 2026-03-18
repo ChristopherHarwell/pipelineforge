@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { DagBuilder } from "../../src/core/DagBuilder.js";
-import type { Blueprint } from "../../src/types/Blueprint.js";
-import type { DagGraph } from "../../src/types/Graph.js";
+import { DagBuilder } from "@core/DagBuilder.ts";
+import type { Blueprint } from "@pftypes/Blueprint.ts";
+import type { DagGraph } from "@pftypes/Graph.ts";
 
 // ===========================================================================
 // DagBuilder

@@ -41,20 +41,20 @@ export function createStableIntegerId(
 // ── Deep Freeze ─────────────────────────────────────────────────────
 // Import for local use and re-export for test consumers.
 
-import { deepFreeze } from "../../src/utils/deepfreeze.js";
+import { deepFreeze } from "@utils/deepfreeze.ts";
 export { deepFreeze };
-export type { DeepReadonly } from "../../src/utils/deepfreeze.js";
+export type { DeepReadonly } from "@utils/deepfreeze.ts";
 
 // ── Pipeline Test Factories ─────────────────────────────────────────
 
-import type { GateResult } from "../../src/types/Gate.js";
+import type { GateResult } from "@pftypes/Gate.ts";
 import type {
   ContainerResult,
   NodeState,
   PipelineState,
   ReviewTiming,
-} from "../../src/types/Pipeline.js";
-import type { Blueprint } from "../../src/types/Blueprint.js";
+} from "@pftypes/Pipeline.ts";
+import type { Blueprint } from "@pftypes/Blueprint.ts";
 
 /**
  * Create a ContainerResult with sensible defaults.
@@ -120,6 +120,7 @@ export function createPipelineState(
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     status: "running" as const,
+    discord_thread_id: null,
     nodes,
     ...overrides,
   });

@@ -4,8 +4,8 @@ import type {
   PipelineState,
   PipelineSummary,
   NodeState,
-} from "../types/Pipeline.js";
-import type { GateResult, RejectionRecord } from "../types/Gate.js";
+} from "@pftypes/Pipeline.ts";
+import type { GateResult, RejectionRecord } from "@pftypes/Gate.ts";
 
 // ── State Manager ───────────────────────────────────────────────────
 // Persists and restores pipeline state as JSON files.

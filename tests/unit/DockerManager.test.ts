@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { DockerManager } from "../../src/core/DockerManager.js";
-import type { DockerConfig, SpawnOptions } from "../../src/core/DockerManager.js";
-import type { DagNode } from "../../src/types/Graph.js";
+import { DockerManager } from "@core/DockerManager.ts";
+import type { DockerConfig, SpawnOptions } from "@core/DockerManager.ts";
+import type { DagNode } from "@pftypes/Graph.ts";
 import { createBlueprint, createStableTestId, deepFreeze } from "../utils/mock-data.js";
-import type { Blueprint } from "../../src/types/Blueprint.js";
+import type { Blueprint } from "@pftypes/Blueprint.ts";
 
 // ===========================================================================
 // DockerManager

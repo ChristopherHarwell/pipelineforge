@@ -1,4 +1,4 @@
-import type { GateResult, RejectionRecord } from "./Gate.js";
+import type { GateResult, RejectionRecord } from "@pftypes/Gate.ts";
 
 // ── Node Status ─────────────────────────────────────────────────────
 
@@ -13,7 +13,8 @@ export type NodeStatus =
   | "passed"
   | "failed"
   | "skipped"
-  | "awaiting_human";
+  | "awaiting_human"
+  | "awaiting_answer";
 
 // ── Pipeline Status ─────────────────────────────────────────────────
 
@@ -58,6 +59,7 @@ export interface PipelineState {
   readonly created_at: string;
   readonly updated_at: string;
   readonly status: PipelineStatus;
+  readonly discord_thread_id: string | null;
   readonly nodes: ReadonlyArray<NodeState>;
 }
 

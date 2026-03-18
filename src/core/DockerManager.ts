@@ -1,10 +1,10 @@
 import type Docker from "dockerode";
 import type { Readable } from "node:stream";
 import { PassThrough } from "node:stream";
-import type { Blueprint } from "../types/Blueprint.js";
-import type { DagNode } from "../types/Graph.js";
-import type { ContainerResult } from "../types/Pipeline.js";
-import type { PipelineLogger } from "../types/Logger.js";
+import type { Blueprint } from "@pftypes/Blueprint.ts";
+import type { DagNode } from "@pftypes/Graph.ts";
+import type { ContainerResult } from "@pftypes/Pipeline.ts";
+import type { PipelineLogger } from "@pftypes/Logger.ts";
 
 // ── Docker Config ───────────────────────────────────────────────────
 

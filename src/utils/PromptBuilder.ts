@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
-import type { Blueprint } from "../types/Blueprint.js";
-import { TemplateEngine } from "./TemplateEngine.js";
+import type { Blueprint } from "@pftypes/Blueprint.ts";
+import { TemplateEngine } from "@utils/TemplateEngine.ts";
 
 // ── Prompt Context ──────────────────────────────────────────────────
 

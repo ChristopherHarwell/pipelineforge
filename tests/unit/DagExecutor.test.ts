@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { DagExecutor } from "../../src/core/DagExecutor.js";
-import type { ExecutorConfig, ExecutionResult } from "../../src/core/DagExecutor.js";
-import type { DagGraph, DagNode } from "../../src/types/Graph.js";
-import type { Blueprint } from "../../src/types/Blueprint.js";
-import type { PipelineState, NodeState, ContainerResult } from "../../src/types/Pipeline.js";
-import type { GateEvaluation } from "../../src/core/GateEvaluator.js";
-import type { GateResult } from "../../src/types/Gate.js";
-import type { WorktreeInfo, MergeResult } from "../../src/core/WorktreeManager.js";
-import type { PromptContext } from "../../src/utils/PromptBuilder.js";
-import type { PipelineLogger } from "../../src/types/Logger.js";
-import { NoopLogger } from "../../src/utils/NoopLogger.js";
+import { DagExecutor } from "@core/DagExecutor.ts";
+import type { ExecutorConfig, ExecutionResult } from "@core/DagExecutor.ts";
+import type { DagGraph, DagNode } from "@pftypes/Graph.ts";
+import type { Blueprint } from "@pftypes/Blueprint.ts";
+import type { PipelineState, NodeState, ContainerResult } from "@pftypes/Pipeline.ts";
+import type { GateEvaluation } from "@core/GateEvaluator.ts";
+import type { GateResult } from "@pftypes/Gate.ts";
+import type { WorktreeInfo, MergeResult } from "@core/WorktreeManager.ts";
+import type { PromptContext } from "@utils/PromptBuilder.ts";
+import type { PipelineLogger } from "@pftypes/Logger.ts";
+import { NoopLogger } from "@utils/NoopLogger.ts";
 import {
   createContainerResult,
   createNodeState,

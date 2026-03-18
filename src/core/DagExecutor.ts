@@ -1,22 +1,28 @@
-import type { Blueprint } from "../types/Blueprint.js";
-import type { DagGraph, DagNode } from "../types/Graph.js";
+import type { Blueprint } from "@pftypes/Blueprint.ts";
+import type { DagGraph, DagNode } from "@pftypes/Graph.ts";
 import type {
   ContainerResult,
   NodeState,
   PipelineState,
   ReviewTiming,
-} from "../types/Pipeline.js";
-import type { BlueprintRegistry } from "./BlueprintRegistry.js";
-import type { DockerManager } from "./DockerManager.js";
-import type { GateEvaluator, GateEvaluation } from "./GateEvaluator.js";
-import type { StateManager } from "./StateManager.js";
-import type { WorktreeManager, WorktreeInfo, MergeResult } from "./WorktreeManager.js";
-import type { PromptBuilder, PromptContext } from "../utils/PromptBuilder.js";
-import type { PipelineLogger, NodeLogEvent } from "../types/Logger.js";
-import { NodeFSM, createNodeFSM } from "./NodeFSM.js";
-import type { StateId, TransitionEvent } from "./NodeFSM.js";
-import { PipelineFSM, createPipelineFSM } from "./PipelineFSM.js";
-import type { PipelineEvent } from "./PipelineFSM.js";
+} from "@pftypes/Pipeline.ts";
+import type { BlueprintRegistry } from "@core/BlueprintRegistry.ts";
+import type { DockerManager } from "@core/DockerManager.ts";
+import type { GateEvaluator, GateEvaluation } from "@core/GateEvaluator.ts";
+import type { StateManager } from "@core/StateManager.ts";
+import type { WorktreeManager, WorktreeInfo, MergeResult } from "@core/WorktreeManager.ts";
+import type { PromptBuilder, PromptContext } from "@utils/PromptBuilder.ts";
+import type { PipelineLogger, NodeLogEvent } from "@pftypes/Logger.ts";
+import type { NotificationRouter, NotificationPayload } from "@core/NotificationRouter.ts";
+import type { ResolvedResponse } from "@core/ResponseResolver.ts";
+import { ResponseResolver } from "@core/ResponseResolver.ts";
+import { QuestionDetector } from "@core/QuestionDetector.ts";
+import type { QuestionDetectionResult } from "@core/QuestionDetector.ts";
+import type { DiscordMessageId, NotificationType } from "@pftypes/Discord.ts";
+import { NodeFSM, createNodeFSM } from "@core/NodeFSM.ts";
+import type { StateId, TransitionEvent } from "@core/NodeFSM.ts";
+import { PipelineFSM, createPipelineFSM } from "@core/PipelineFSM.ts";
+import type { PipelineEvent } from "@core/PipelineFSM.ts";
 
 // ── Executor Config ─────────────────────────────────────────────────
 
@@ -47,6 +53,9 @@ export class DagExecutor {
   private readonly promptBuilder: PromptBuilder;
   private readonly logger: PipelineLogger;
   private readonly config: ExecutorConfig;
+  private readonly notificationRouter: NotificationRouter | null;
+  private readonly responseResolver: ResponseResolver;
+  private readonly questionDetector: QuestionDetector;
 
   // ── FSM instances ─────────────────────────────────────────────────
 
@@ -61,6 +70,7 @@ export class DagExecutor {
     promptBuilder: PromptBuilder,
     logger: PipelineLogger,
     config: ExecutorConfig,
+    notificationRouter: NotificationRouter | null = null,
   ) {
     this.dockerManager = dockerManager;
     this.gateEvaluator = gateEvaluator;
@@ -69,6 +79,9 @@ export class DagExecutor {
     this.promptBuilder = promptBuilder;
     this.logger = logger;
     this.config = config;
+    this.notificationRouter = notificationRouter;
+    this.responseResolver = new ResponseResolver();
+    this.questionDetector = new QuestionDetector();
   }
 
   // ── Public API ────────────────────────────────────────────────────
@@ -132,22 +145,33 @@ export class DagExecutor {
       for (const outcome of outcomes) {
         currentState = this.applyOutcome(outcome, currentState);
 
-        // If any node caused a pause, persist and return immediately
+        // If any node caused a pause, handle via notification or CLI
         if (outcome.pause !== null) {
-          this.applyPipelineEvent("NODE_PAUSED");
-          currentState = this.syncPipelineStatus(currentState);
-          await this.stateManager.save(currentState);
+          if (this.notificationRouter !== null) {
+            // ── Discord routing: notify, wait, resolve, continue ──
+            currentState = await this.handlePauseViaNotification(
+              outcome,
+              currentState,
+              graph,
+              blueprints,
+            );
+          } else {
+            // ── CLI-only: return paused for manual resume ──
+            this.applyPipelineEvent("NODE_PAUSED");
+            currentState = this.syncPipelineStatus(currentState);
+            await this.stateManager.save(currentState);
 
-          this.logger.pipelineEvent(
-            "info",
-            `Pipeline paused: ${outcome.pause}`,
-          );
+            this.logger.pipelineEvent(
+              "info",
+              `Pipeline paused: ${outcome.pause}`,
+            );
 
-          return {
-            state: currentState,
-            paused: true,
-            pauseReason: outcome.pause,
-          };
+            return {
+              state: currentState,
+              paused: true,
+              pauseReason: outcome.pause,
+            };
+          }
         }
       }
 
@@ -324,7 +348,32 @@ export class DagExecutor {
       };
     }
 
-    // Gate passed
+    // Gate passed — check for agent questions before completing
+    const questionDetection: QuestionDetectionResult | null =
+      this.checkForAgentQuestion(result, fsm);
+
+    if (questionDetection !== null) {
+      this.applyNodeEvent(fsm, "AGENT_QUESTION");
+
+      this.logger.nodeEvent(
+        "info",
+        this.toLogEvent(node),
+        `Agent question detected (confidence: ${String(questionDetection.confidence)})`,
+      );
+
+      return {
+        nodeId: node.id,
+        stateUpdates: {
+          status: fsm.getStateName(),
+          output: result.stdout,
+          exit_code: result.exitCode,
+          gate_result: evaluation.result,
+          started_at: new Date().toISOString(),
+        },
+        pause: `Agent ${node.id} has a question:\n${questionDetection.questions.join("\n")}`,
+      };
+    }
+
     this.logger.nodeEvent(
       "info",
       this.toLogEvent(node),
@@ -475,6 +524,108 @@ export class DagExecutor {
       },
       pause: null,
     };
+  }
+
+  // ── Notification-Based Pause Handling ────────────────────────────────
+  // When a NotificationRouter is available, pause events are routed to
+  // Discord instead of returning to the CLI. The executor waits for
+  // a Discord response, resolves it to an FSM event, and continues.
+
+  private async handlePauseViaNotification(
+    outcome: NodeOutcome,
+    state: PipelineState,
+    _graph: DagGraph,
+    _blueprints: BlueprintRegistry,
+  ): Promise<PipelineState> {
+    const router: NotificationRouter = this.notificationRouter!;
+    const nodeState: NodeState | undefined = state.nodes.find(
+      (n: NodeState): boolean => n.id === outcome.nodeId,
+    );
+    const currentNodeStatus: string = nodeState?.status ?? "running";
+
+    // Determine notification type from the FSM state
+    const notificationType: NotificationType = this.inferNotificationType(currentNodeStatus);
+
+    const payload: NotificationPayload = {
+      type: notificationType,
+      pipelineId: state.id,
+      nodeId: outcome.nodeId,
+      nodeStatus: nodeState?.status ?? "running",
+      output: nodeState?.output ?? null,
+      gateDetails: nodeState?.gate_result?.details ?? null,
+    };
+
+    const messageId: DiscordMessageId = await router.notify(payload);
+
+    // Wait for Discord response
+    const discordResponse = await router.waitForResponse(
+      messageId,
+      this.config.maxConcurrent * 60_000, // timeout proportional to concurrency
+    );
+
+    // Resolve the response to an FSM event
+    const resolved: ResolvedResponse = this.responseResolver.resolve(
+      discordResponse,
+      nodeState?.status ?? "running",
+    );
+
+    // Apply the resolved FSM event
+    const fsm: NodeFSM = this.nodeFSMs.get(outcome.nodeId)!;
+    this.applyNodeEvent(fsm, resolved.fsmEvent);
+
+    // Update node state with the new status
+    const updatedState: PipelineState = this.stateManager.updateNode(
+      state,
+      outcome.nodeId,
+      { status: fsm.getStateName() },
+    );
+
+    this.logger.pipelineEvent(
+      "info",
+      `Discord response for ${outcome.nodeId}: ${resolved.action} → ${fsm.getStateName()}`,
+    );
+
+    await this.stateManager.save(updatedState);
+    return updatedState;
+  }
+
+  private inferNotificationType(nodeStatus: string): NotificationType {
+    switch (nodeStatus) {
+      case "awaiting_answer":
+        return "agent_question";
+      case "awaiting_human":
+        return "human_gate";
+      case "awaiting_proposal_review":
+        return "proposal_review";
+      case "awaiting_implementation_review":
+        return "implementation_review";
+      default:
+        return "pipeline_update";
+    }
+  }
+
+  // ── Agent Question Detection ──────────────────────────────────────
+  // After standard execution, check if the agent output contains
+  // questions. If detected and a NotificationRouter is available,
+  // transition to AWAITING_ANSWER instead of completing.
+
+  private checkForAgentQuestion(
+    result: ContainerResult,
+    fsm: NodeFSM,
+  ): QuestionDetectionResult | null {
+    if (this.notificationRouter === null) {
+      return null;
+    }
+
+    const detection: QuestionDetectionResult = this.questionDetector.detect(
+      result.stdout,
+    );
+
+    if (detection.detected && fsm.canTransition("AGENT_QUESTION")) {
+      return detection;
+    }
+
+    return null;
   }
 
   // ── FSM Event Application ─────────────────────────────────────────
@@ -702,7 +853,7 @@ interface NodeOutcome {
   readonly stateUpdates: Partial<NodeState>;
   readonly pause: string | null;
   readonly rejection?: {
-    readonly gateResult: import("../types/Gate.js").GateResult;
+    readonly gateResult: import("@pftypes/Gate.ts").GateResult;
     readonly routeTo: string | undefined;
   };
 }

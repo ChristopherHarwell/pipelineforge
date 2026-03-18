@@ -42,7 +42,7 @@ export type { StateId };
 
 // ── State name map ──────────────────────────────────────────────────
 
-import type { NodeStatus } from "../types/Pipeline.js";
+import type { NodeStatus } from "@pftypes/Pipeline.ts";
 
 const STATE_NAMES: readonly [
   NodeStatus, NodeStatus, NodeStatus, NodeStatus, NodeStatus,

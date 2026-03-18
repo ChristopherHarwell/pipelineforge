@@ -2,12 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { StateManager } from "../../src/core/StateManager.js";
+import { StateManager } from "@core/StateManager.ts";
 import type {
   PipelineState,
   NodeState,
   PipelineSummary,
-} from "../../src/types/Pipeline.js";
+} from "@pftypes/Pipeline.ts";
 import {
   createNodeState,
   createPipelineState,

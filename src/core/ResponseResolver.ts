@@ -1,8 +1,8 @@
-import { deepFreeze } from "../utils/deepfreeze.js";
-import type { DeepReadonly } from "../utils/deepfreeze.js";
-import type { ResponseAction, DiscordResponse } from "../types/Discord.js";
-import type { NodeStatus } from "../types/Pipeline.js";
-import type { TransitionEvent } from "./NodeFSM.js";
+import { deepFreeze } from "@utils/deepfreeze.ts";
+import type { DeepReadonly } from "@utils/deepfreeze.ts";
+import type { ResponseAction, DiscordResponse } from "@pftypes/Discord.ts";
+import type { NodeStatus } from "@pftypes/Pipeline.ts";
+import type { TransitionEvent } from "@core/NodeFSM.ts";
 
 // ── Resolved Response ────────────────────────────────────────────────
 

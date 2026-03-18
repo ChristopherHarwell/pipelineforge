@@ -13,6 +13,14 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@core/*": ["src/core/*"],
+      "@pftypes/*": ["src/types/*"],
+      "@utils/*": ["src/utils/*"]
+    },
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": false,
     "noImplicitReturns": true,

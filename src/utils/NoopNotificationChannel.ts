@@ -1,11 +1,11 @@
-import type { NotificationChannel } from "../types/NotificationChannel.js";
+import type { NotificationChannel } from "@pftypes/NotificationChannel.ts";
 import type {
   DiscordThreadId,
   DiscordMessageId,
   DiscordNotification,
   DiscordResponse,
-} from "../types/Discord.js";
-import { toThreadId, toMessageId } from "../types/Discord.js";
+} from "@pftypes/Discord.ts";
+import { toThreadId, toMessageId } from "@pftypes/Discord.ts";
 
 // ── Noop Notification Channel ────────────────────────────────────────
 // Silent implementation for tests and when Discord is not enabled.

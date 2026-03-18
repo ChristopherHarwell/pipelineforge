@@ -1,13 +1,13 @@
-import type { NotificationChannel } from "../types/NotificationChannel.js";
+import type { NotificationChannel } from "@pftypes/NotificationChannel.ts";
 import type {
   OpenClawConfig,
   DiscordThreadId,
   DiscordMessageId,
   DiscordNotification,
   DiscordResponse,
-} from "../types/Discord.js";
-import { toThreadId, toMessageId } from "../types/Discord.js";
-import type { PipelineLogger } from "../types/Logger.js";
+} from "@pftypes/Discord.ts";
+import { toThreadId, toMessageId } from "@pftypes/Discord.ts";
+import type { PipelineLogger } from "@pftypes/Logger.ts";
 
 // ── OpenClaw HTTP API Client ─────────────────────────────────────────
 // Implements NotificationChannel using OpenClaw's /tools/invoke HTTP
@@ -15,7 +15,9 @@ import type { PipelineLogger } from "../types/Logger.js";
 //
 // API endpoint: POST http://<gateway>:<port>/tools/invoke
 // Auth: Bearer token in Authorization header
-// Payload: { tool, args, sessionKey? }
+// Payload: { tool, action?, args?, sessionKey? }
+// Per docs: `action` is a top-level field, not inside `args`.
+// See: https://docs.openclaw.ai/gateway/tools-invoke-http-api
 
 export class OpenClawClient implements NotificationChannel {
   private readonly config: OpenClawConfig;
@@ -32,16 +34,20 @@ export class OpenClawClient implements NotificationChannel {
     pipelineId: string,
     feature: string,
   ): Promise<DiscordThreadId> => {
+    // Per OpenClaw Discord docs: sending to a forum channel auto-creates a
+    // thread. The first non-empty line of the message becomes the thread title.
     const threadTitle: string = `PipelineForge: ${feature} (${pipelineId})`;
     const body: string = `Pipeline **${pipelineId}** started.\nFeature: ${feature}\n\nUpdates and questions will be posted here.`;
     const message: string = `${threadTitle}\n${body}`;
 
-    const result: ToolInvokeResult = await this.invokeMessageTool({
-      action: "send",
-      channel: "discord",
-      target: `channel:${this.config.forum_channel_id}`,
-      message,
-    });
+    const result: ToolInvokeResult = await this.invokeMessageTool(
+      "send",
+      {
+        channel: "discord",
+        target: `channel:${this.config.forum_channel_id}`,
+        message,
+      },
+    );
 
     const threadId: string = this.extractThreadId(result);
     this.logger.pipelineEvent(
@@ -57,12 +63,14 @@ export class OpenClawClient implements NotificationChannel {
   ): Promise<DiscordMessageId> => {
     const formatted: string = `**${notification.title}**\n\n${notification.body}`;
 
-    const result: ToolInvokeResult = await this.invokeMessageTool({
-      action: "send",
-      channel: "discord",
-      target: `channel:${notification.nodeId}`,
-      message: formatted,
-    });
+    const result: ToolInvokeResult = await this.invokeMessageTool(
+      "send",
+      {
+        channel: "discord",
+        target: `channel:${String(notification.threadId)}`,
+        message: formatted,
+      },
+    );
 
     const messageId: string = this.extractMessageId(result);
     return toMessageId(messageId);
@@ -109,20 +117,29 @@ export class OpenClawClient implements NotificationChannel {
     threadId: DiscordThreadId,
     message: string,
   ): Promise<void> => {
-    await this.invokeMessageTool({
-      action: "send",
-      channel: "discord",
-      target: `channel:${String(threadId)}`,
-      message,
-    });
+    await this.invokeMessageTool(
+      "send",
+      {
+        channel: "discord",
+        target: `channel:${String(threadId)}`,
+        message,
+      },
+    );
   };
 
   // ── HTTP API ─────────────────────────────────────────────────────
 
   private async invokeMessageTool(
+    action: string,
     args: MessageToolArgs,
   ): Promise<ToolInvokeResult> {
     const url: string = `${this.config.gateway_url}/tools/invoke`;
+
+    const requestBody: ToolInvokeRequest = {
+      tool: "message",
+      action,
+      args,
+    };
 
     const response: Response = await fetch(url, {
       method: "POST",
@@ -130,10 +147,7 @@ export class OpenClawClient implements NotificationChannel {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${this.config.bearer_token}`,
       },
-      body: JSON.stringify({
-        tool: "message",
-        args,
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {
@@ -158,12 +172,14 @@ export class OpenClawClient implements NotificationChannel {
   private async readThreadMessages(
     threadId: DiscordThreadId,
   ): Promise<ReadonlyArray<ThreadMessage>> {
-    const result: ToolInvokeResult = await this.invokeMessageTool({
-      action: "read",
-      channel: "discord",
-      target: `channel:${String(threadId)}`,
-      limit: 10,
-    });
+    const result: ToolInvokeResult = await this.invokeMessageTool(
+      "read",
+      {
+        channel: "discord",
+        target: `channel:${String(threadId)}`,
+        limit: 10,
+      },
+    );
 
     const messages: unknown = result.result?.messages;
     if (!Array.isArray(messages)) {
@@ -219,11 +235,19 @@ export class OpenClawClient implements NotificationChannel {
 
 // ── Internal Types ───────────────────────────────────────────────────
 
-interface MessageToolArgs {
+/** Top-level request body for OpenClaw /tools/invoke endpoint. */
+interface ToolInvokeRequest {
+  readonly tool: string;
   readonly action: string;
+  readonly args: MessageToolArgs;
+}
+
+/** Tool-specific arguments (everything except action, which is top-level). */
+interface MessageToolArgs {
   readonly channel: string;
   readonly target: string;
   readonly message?: string;
+  readonly threadName?: string;
   readonly limit?: number;
 }
 

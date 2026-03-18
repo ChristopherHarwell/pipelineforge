@@ -1,7 +1,7 @@
-import type { Gate } from "../types/Blueprint.js";
-import type { GateResult } from "../types/Gate.js";
-import type { ContainerResult, NodeState, PipelineState } from "../types/Pipeline.js";
-import type { TransitionEvent } from "./NodeFSM.js";
+import type { Gate } from "@pftypes/Blueprint.ts";
+import type { GateResult } from "@pftypes/Gate.ts";
+import type { ContainerResult, NodeState, PipelineState } from "@pftypes/Pipeline.ts";
+import type { TransitionEvent } from "@core/NodeFSM.ts";
 
 // ── Gate Evaluation Result with FSM Event ───────────────────────────
 

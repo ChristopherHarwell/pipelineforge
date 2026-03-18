@@ -1,12 +1,12 @@
 // ── Compile-time assertions for PipelineFSM ─────────────────────────
 
-import type { PipelineStateId } from "../../src/core/PipelineFSM.js";
+import type { PipelineStateId } from "@core/PipelineFSM.ts";
 import {
   P_RUNNING,
   P_PAUSED,
   P_COMPLETED,
   P_FAILED,
-} from "../../src/core/PipelineFSM.js";
+} from "@core/PipelineFSM.ts";
 
 type Assert<T extends true> = T;
 type Equal<A, B> = [A] extends [B] ? [B] extends [A] ? true : false : false;

@@ -2,7 +2,7 @@
 // Models the lifecycle of a pipeline as a finite state machine.
 // Hex-encoded state IDs with typed transition map.
 
-import type { PipelineStatus } from "../types/Pipeline.js";
+import type { PipelineStatus } from "@pftypes/Pipeline.ts";
 
 // ── State encoding (2-bit hex) ──────────────────────────────────────
 

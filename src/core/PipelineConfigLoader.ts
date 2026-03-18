@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import yaml from "js-yaml";
 import { z } from "zod";
-import type { PipelineConfig } from "../types/Pipeline.js";
+import type { PipelineConfig } from "@pftypes/Pipeline.ts";
 
 // ── Pipeline Config Schema ──────────────────────────────────────────
 

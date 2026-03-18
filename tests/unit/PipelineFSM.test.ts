@@ -6,8 +6,8 @@ import {
   P_PAUSED,
   P_COMPLETED,
   P_FAILED,
-} from "../../src/core/PipelineFSM.js";
-import type { PipelineStateId, PipelineEvent } from "../../src/core/PipelineFSM.js";
+} from "@core/PipelineFSM.ts";
+import type { PipelineStateId, PipelineEvent } from "@core/PipelineFSM.ts";
 import { createStableTestId } from "../utils/mock-data.js";
 
 // ===========================================================================
@@ -170,7 +170,7 @@ describe("PipelineFSM", () => {
     ])("should create FSM from status '$label'", ({ status, expectedState }) => {
       const fsm: PipelineFSM = createPipelineFSM(
         "pipeline-1",
-        status as import("../../src/types/Pipeline.js").PipelineStatus,
+        status as import("@pftypes/Pipeline.ts").PipelineStatus,
       );
 
       expect(fsm.getState()).toBe(expectedState);
@@ -180,7 +180,7 @@ describe("PipelineFSM", () => {
       expect(() =>
         createPipelineFSM(
           "pipeline-1",
-          "invalid" as import("../../src/types/Pipeline.js").PipelineStatus,
+          "invalid" as import("@pftypes/Pipeline.ts").PipelineStatus,
         ),
       ).toThrow(/Unknown PipelineStatus/);
     });

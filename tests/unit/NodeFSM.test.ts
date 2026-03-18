@@ -13,8 +13,8 @@ import {
   FAILED,
   SKIPPED,
   AWAITING_HUMAN,
-} from "../../src/core/NodeFSM.js";
-import type { StateId, TransitionEvent } from "../../src/core/NodeFSM.js";
+} from "@core/NodeFSM.ts";
+import type { StateId, TransitionEvent } from "@core/NodeFSM.ts";
 import { createStableTestId } from "../utils/mock-data.js";
 
 // ===========================================================================
@@ -293,7 +293,7 @@ describe("NodeFSM", () => {
     ])("should create FSM from status '$label'", ({ status, expectedState }) => {
       const fsm: NodeFSM = createNodeFSM(
         "node-1",
-        status as import("../../src/types/Pipeline.js").NodeStatus,
+        status as import("@pftypes/Pipeline.ts").NodeStatus,
       );
 
       expect(fsm.getState()).toBe(expectedState);
@@ -301,7 +301,7 @@ describe("NodeFSM", () => {
 
     it("should throw for unknown status", () => {
       expect(() =>
-        createNodeFSM("node-1", "invalid" as import("../../src/types/Pipeline.js").NodeStatus),
+        createNodeFSM("node-1", "invalid" as import("@pftypes/Pipeline.ts").NodeStatus),
       ).toThrow(/Unknown NodeStatus/);
     });
   });

@@ -6,7 +6,7 @@ import type {
   PipelineLogger,
   LogLevel,
   NodeLogEvent,
-} from "../types/Logger.js";
+} from "@pftypes/Logger.ts";
 
 export class NoopLogger implements PipelineLogger {
   nodeEvent(

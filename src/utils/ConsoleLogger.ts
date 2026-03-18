@@ -8,7 +8,7 @@ import type {
   PipelineLogger,
   LogLevel,
   NodeLogEvent,
-} from "../types/Logger.js";
+} from "@pftypes/Logger.ts";
 
 // ── Node Status Icons ──────────────────────────────────────────────
 

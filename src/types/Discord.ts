@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { DeepReadonly } from "../utils/deepfreeze.js";
+import type { DeepReadonly } from "@utils/deepfreeze.ts";
 
 // ── Branded IDs ──────────────────────────────────────────────────────
 
@@ -50,6 +50,7 @@ export interface DiscordNotification {
   readonly type: NotificationType;
   readonly pipelineId: string;
   readonly nodeId: string;
+  readonly threadId: DiscordThreadId;
   readonly title: string;
   readonly body: string;
   readonly expectsReply: boolean;

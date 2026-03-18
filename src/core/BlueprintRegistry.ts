@@ -1,7 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join, extname } from "node:path";
 import yaml from "js-yaml";
-import { BlueprintSchema, type Blueprint } from "../types/Blueprint.js";
+import { BlueprintSchema, type Blueprint } from "@pftypes/Blueprint.ts";
 
 // ── Blueprint Registry ──────────────────────────────────────────────
 // Loads, validates, and stores blueprint YAML definitions.

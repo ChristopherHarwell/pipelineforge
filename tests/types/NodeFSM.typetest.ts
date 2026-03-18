@@ -1,7 +1,7 @@
 // ── Compile-time transition verification ────────────────────────────
 // If this file compiles, all assertions pass. Incorrect types → compile error.
 
-import type { StateId } from "../../src/core/NodeFSM.js";
+import type { StateId } from "@core/NodeFSM.ts";
 import {
   PENDING,
   READY,
@@ -14,7 +14,7 @@ import {
   FAILED,
   SKIPPED,
   AWAITING_HUMAN,
-} from "../../src/core/NodeFSM.js";
+} from "@core/NodeFSM.ts";
 
 type Assert<T extends true> = T;
 type Equal<A, B> = [A] extends [B] ? [B] extends [A] ? true : false : false;

@@ -7,27 +7,34 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { DagGraph, DagNode } from "../types/Graph.js";
+import type { DagGraph, DagNode } from "@pftypes/Graph.ts";
 import type {
   NodeState,
   PipelineState,
   PipelineConfig,
   ReviewTiming,
   PipelineSummary,
-} from "../types/Pipeline.js";
-import type { ExecutionResult } from "../core/DagExecutor.js";
-import { BlueprintRegistry } from "../core/BlueprintRegistry.js";
-import { DagBuilder } from "../core/DagBuilder.js";
-import { DagExecutor } from "../core/DagExecutor.js";
-import { DockerManager } from "../core/DockerManager.js";
-import { GateEvaluator } from "../core/GateEvaluator.js";
-import { StateManager } from "../core/StateManager.js";
-import { WorktreeManager } from "../core/WorktreeManager.js";
-import { PromptBuilder } from "../utils/PromptBuilder.js";
-import { TemplateEngine } from "../utils/TemplateEngine.js";
-import { loadPipelineConfig } from "../core/PipelineConfigLoader.js";
-import { ConsoleLogger } from "../utils/ConsoleLogger.js";
-import type { PipelineLogger } from "../types/Logger.js";
+} from "@pftypes/Pipeline.ts";
+import type { ExecutionResult } from "@core/DagExecutor.ts";
+import { BlueprintRegistry } from "@core/BlueprintRegistry.ts";
+import { DagBuilder } from "@core/DagBuilder.ts";
+import { DagExecutor } from "@core/DagExecutor.ts";
+import { DockerManager } from "@core/DockerManager.ts";
+import { GateEvaluator } from "@core/GateEvaluator.ts";
+import { StateManager } from "@core/StateManager.ts";
+import { WorktreeManager } from "@core/WorktreeManager.ts";
+import { PromptBuilder } from "@utils/PromptBuilder.ts";
+import { TemplateEngine } from "@utils/TemplateEngine.ts";
+import { loadPipelineConfig } from "@core/PipelineConfigLoader.ts";
+import { ConsoleLogger } from "@utils/ConsoleLogger.ts";
+import type { PipelineLogger } from "@pftypes/Logger.ts";
+import { OpenClawClient } from "@core/OpenClawClient.ts";
+import { NotificationRouter } from "@core/NotificationRouter.ts";
+import { OpenClawConfigSchema } from "@pftypes/Discord.ts";
+import type { OpenClawConfig } from "@pftypes/Discord.ts";
+import { toThreadId } from "@pftypes/Discord.ts";
+import type { DiscordThreadId } from "@pftypes/Discord.ts";
+import type { NotificationChannel } from "@pftypes/NotificationChannel.ts";
 
 const execFileAsync: typeof execFile.__promisify__ = promisify(execFile);
 
@@ -88,6 +95,10 @@ program
   .option("--pipelines-dir <path>", "Pipelines directory", DEFAULT_PIPELINES_DIR)
   .option("--state-dir <path>", "State directory", DEFAULT_STATE_DIR)
   .option("--image <name>", "Docker image name", DEFAULT_IMAGE_NAME)
+  .option("--discord", "Enable Discord notifications via OpenClaw", false)
+  .option("--discord-channel <id>", "Discord forum channel ID")
+  .option("--openclaw-url <url>", "OpenClaw gateway URL", process.env["OPENCLAW_URL"] ?? "http://127.0.0.1:18789")
+  .option("--openclaw-token <token>", "OpenClaw bearer token (or OPENCLAW_TOKEN env var)")
   .action(async (opts: {
     readonly feature: string;
     readonly pipeline: string;
@@ -99,6 +110,10 @@ program
     readonly pipelinesDir: string;
     readonly stateDir: string;
     readonly image: string;
+    readonly discord: boolean;
+    readonly discordChannel: string | undefined;
+    readonly openclawUrl: string;
+    readonly openclawToken: string | undefined;
   }): Promise<void> => {
     const pipelineId: string = randomUUID().slice(0, 8);
     const repoDir: string = opts.repoDir !== undefined
@@ -160,7 +175,7 @@ program
 
     // ── Create initial state ────────────────────────────────────
     console.log("Initializing pipeline state...");
-    const initialState: PipelineState = createInitialState(
+    let initialState: PipelineState = createInitialState(
       pipelineId,
       opts.pipeline,
       opts.feature,
@@ -195,6 +210,55 @@ program
     const templateEngine: TemplateEngine = new TemplateEngine();
     const promptBuilder: PromptBuilder = new PromptBuilder(templateEngine);
 
+    // ── Notification Channel ─────────────────────────────────
+    let notificationRouter: NotificationRouter | null = null;
+
+    if (opts.discord) {
+      const bearerToken: string | undefined =
+        opts.openclawToken ?? process.env["OPENCLAW_TOKEN"];
+
+      if (bearerToken === undefined || bearerToken.length === 0) {
+        console.error(
+          "Discord enabled but no bearer token provided. " +
+          "Use --openclaw-token or set OPENCLAW_TOKEN env var.",
+        );
+        process.exit(1);
+      }
+
+      if (opts.discordChannel === undefined) {
+        console.error(
+          "Discord enabled but --discord-channel not provided.",
+        );
+        process.exit(1);
+      }
+
+      const openclawConfig: OpenClawConfig = OpenClawConfigSchema.parse({
+        gateway_url: opts.openclawUrl,
+        bearer_token: bearerToken,
+        forum_channel_id: opts.discordChannel,
+      });
+
+      const channel: NotificationChannel = new OpenClawClient(
+        openclawConfig,
+        logger,
+      );
+
+      notificationRouter = new NotificationRouter(channel, logger, null);
+
+      // Create Discord thread and store ID in state
+      const threadId = await notificationRouter.ensureThread(
+        pipelineId,
+        opts.feature,
+      );
+      initialState = {
+        ...initialState,
+        discord_thread_id: String(threadId),
+      };
+      await stateManager.save(initialState);
+
+      console.log(`  Discord:        enabled (thread: ${String(threadId)})`);
+    }
+
     const executor: DagExecutor = new DagExecutor(
       dockerManager,
       gateEvaluator,
@@ -203,6 +267,7 @@ program
       promptBuilder,
       logger,
       { maxConcurrent, reviewTiming },
+      notificationRouter,
     );
 
     // ── Execute ─────────────────────────────────────────────────
@@ -231,12 +296,20 @@ program
   .option("--blueprints-dir <path>", "Blueprints directory", DEFAULT_BLUEPRINTS_DIR)
   .option("--pipelines-dir <path>", "Pipelines directory", DEFAULT_PIPELINES_DIR)
   .option("--image <name>", "Docker image name", DEFAULT_IMAGE_NAME)
+  .option("--discord", "Enable Discord notifications via OpenClaw", false)
+  .option("--discord-channel <id>", "Discord forum channel ID")
+  .option("--openclaw-url <url>", "OpenClaw gateway URL", process.env["OPENCLAW_URL"] ?? "http://127.0.0.1:18789")
+  .option("--openclaw-token <token>", "OpenClaw bearer token (or OPENCLAW_TOKEN env var)")
   .action(async (opts: {
     readonly id: string;
     readonly stateDir: string;
     readonly blueprintsDir: string;
     readonly pipelinesDir: string;
     readonly image: string;
+    readonly discord: boolean;
+    readonly discordChannel: string | undefined;
+    readonly openclawUrl: string;
+    readonly openclawToken: string | undefined;
   }): Promise<void> => {
     console.log("╔══════════════════════════════════════════════════════╗");
     console.log("║              PipelineForge — resume                 ║");
@@ -284,6 +357,10 @@ program
       stateDir: opts.stateDir,
     }, resumeLogger);
 
+    // ── Notification Channel ─────────────────────────────────
+    const resumeNotificationRouter: NotificationRouter | null =
+      buildNotificationRouter(opts, resumeLogger, state.discord_thread_id);
+
     const executor: DagExecutor = new DagExecutor(
       dockerManager,
       new GateEvaluator(),
@@ -295,6 +372,7 @@ program
         maxConcurrent: pipelineConfig.defaults.max_concurrent_containers,
         reviewTiming: state.review_timing,
       },
+      resumeNotificationRouter,
     );
 
     // ── Resume execution ────────────────────────────────────────
@@ -323,6 +401,10 @@ program
   .option("--blueprints-dir <path>", "Blueprints directory", DEFAULT_BLUEPRINTS_DIR)
   .option("--pipelines-dir <path>", "Pipelines directory", DEFAULT_PIPELINES_DIR)
   .option("--image <name>", "Docker image name", DEFAULT_IMAGE_NAME)
+  .option("--discord", "Enable Discord notifications via OpenClaw", false)
+  .option("--discord-channel <id>", "Discord forum channel ID")
+  .option("--openclaw-url <url>", "OpenClaw gateway URL", process.env["OPENCLAW_URL"] ?? "http://127.0.0.1:18789")
+  .option("--openclaw-token <token>", "OpenClaw bearer token (or OPENCLAW_TOKEN env var)")
   .action(async (opts: {
     readonly id: string;
     readonly node: string | undefined;
@@ -330,6 +412,10 @@ program
     readonly blueprintsDir: string;
     readonly pipelinesDir: string;
     readonly image: string;
+    readonly discord: boolean;
+    readonly discordChannel: string | undefined;
+    readonly openclawUrl: string;
+    readonly openclawToken: string | undefined;
   }): Promise<void> => {
     console.log("╔══════════════════════════════════════════════════════╗");
     console.log("║              PipelineForge — retry                  ║");
@@ -393,6 +479,10 @@ program
       stateDir: opts.stateDir,
     }, retryLogger);
 
+    // ── Notification Channel ─────────────────────────────────
+    const retryNotificationRouter: NotificationRouter | null =
+      buildNotificationRouter(opts, retryLogger, resetState.discord_thread_id);
+
     const executor: DagExecutor = new DagExecutor(
       dockerManager,
       new GateEvaluator(),
@@ -404,6 +494,7 @@ program
         maxConcurrent: pipelineConfig.defaults.max_concurrent_containers,
         reviewTiming: resetState.review_timing,
       },
+      retryNotificationRouter,
     );
 
     // ── Execute ─────────────────────────────────────────────────
@@ -506,6 +597,57 @@ program.parse();
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
+interface DiscordOpts {
+  readonly discord: boolean;
+  readonly discordChannel: string | undefined;
+  readonly openclawUrl: string;
+  readonly openclawToken: string | undefined;
+}
+
+function buildNotificationRouter(
+  opts: DiscordOpts,
+  logger: PipelineLogger,
+  existingThreadId: string | null,
+): NotificationRouter | null {
+  if (!opts.discord) {
+    return null;
+  }
+
+  const bearerToken: string | undefined =
+    opts.openclawToken ?? process.env["OPENCLAW_TOKEN"];
+
+  if (bearerToken === undefined || bearerToken.length === 0) {
+    console.error(
+      "Discord enabled but no bearer token provided. " +
+      "Use --openclaw-token or set OPENCLAW_TOKEN env var.",
+    );
+    process.exit(1);
+  }
+
+  if (opts.discordChannel === undefined) {
+    console.error(
+      "Discord enabled but --discord-channel not provided.",
+    );
+    process.exit(1);
+  }
+
+  const openclawConfig: OpenClawConfig = OpenClawConfigSchema.parse({
+    gateway_url: opts.openclawUrl,
+    bearer_token: bearerToken,
+    forum_channel_id: opts.discordChannel,
+  });
+
+  const channel: NotificationChannel = new OpenClawClient(
+    openclawConfig,
+    logger,
+  );
+
+  const threadId: DiscordThreadId | null =
+    existingThreadId !== null ? toThreadId(existingThreadId) : null;
+
+  return new NotificationRouter(channel, logger, threadId);
+}
+
 function validateReviewTiming(timing: string): ReviewTiming {
   if (timing === "before" || timing === "after" || timing === "both") {
     return timing;
@@ -561,6 +703,7 @@ function createInitialState(
     created_at: now,
     updated_at: now,
     status: "running",
+    discord_thread_id: null,
     nodes,
   };
 }

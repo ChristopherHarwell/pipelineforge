@@ -1,14 +1,13 @@
-import type { DeepReadonly } from "../utils/deepfreeze.js";
-import type { NotificationChannel } from "../types/NotificationChannel.js";
+import type { NotificationChannel } from "@pftypes/NotificationChannel.ts";
 import type {
   DiscordThreadId,
   DiscordMessageId,
   DiscordNotification,
   DiscordResponse,
   NotificationType,
-} from "../types/Discord.js";
-import type { NodeStatus } from "../types/Pipeline.js";
-import type { PipelineLogger } from "../types/Logger.js";
+} from "@pftypes/Discord.ts";
+import type { NodeStatus } from "@pftypes/Pipeline.ts";
+import type { PipelineLogger } from "@pftypes/Logger.ts";
 
 // ── Discord Character Limit ──────────────────────────────────────────
 
@@ -142,10 +141,15 @@ export class NotificationRouter {
     const title: string = this.formatTitle(payload);
     const body: string = this.formatBody(payload);
 
+    if (this.threadId === null) {
+      throw new Error("Cannot format notification without a thread ID");
+    }
+
     return {
       type: payload.type,
       pipelineId: payload.pipelineId,
       nodeId: payload.nodeId,
+      threadId: this.threadId,
       title,
       body,
       expectsReply: payload.type !== "pipeline_update",

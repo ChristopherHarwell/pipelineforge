@@ -1,5 +1,5 @@
-import type { Blueprint } from "../types/Blueprint.js";
-import type { DagGraph, DagNode } from "../types/Graph.js";
+import type { Blueprint } from "@pftypes/Blueprint.ts";
+import type { DagGraph, DagNode } from "@pftypes/Graph.ts";
 
 // ── DAG Builder ─────────────────────────────────────────────────────
 // Builds a directed acyclic graph from blueprint dependencies.

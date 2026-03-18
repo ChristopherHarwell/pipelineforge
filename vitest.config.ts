@@ -1,6 +1,14 @@
 import { defineConfig } from "vitest/config";
+import { resolve } from "node:path";
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      "@core": resolve(__dirname, "src/core"),
+      "@pftypes": resolve(__dirname, "src/types"),
+      "@utils": resolve(__dirname, "src/utils"),
+    },
+  },
   test: {
     globals: true,
     environment: "node",
