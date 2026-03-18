@@ -39,23 +39,11 @@ export function createStableIntegerId(
 }
 
 // ── Deep Freeze ─────────────────────────────────────────────────────
+// Import for local use and re-export for test consumers.
 
-/**
- * Recursively freeze an object and all nested properties.
- *
- * @param obj - The object to deep freeze
- * @returns The same object, deeply frozen
- */
-export function deepFreeze<T>(obj: T): T {
-  if (obj === null || obj === undefined || typeof obj !== "object") {
-    return obj;
-  }
-  Object.freeze(obj);
-  for (const value of Object.values(obj)) {
-    deepFreeze(value);
-  }
-  return obj;
-}
+import { deepFreeze } from "../../src/utils/deepfreeze.js";
+export { deepFreeze };
+export type { DeepReadonly } from "../../src/utils/deepfreeze.js";
 
 // ── Pipeline Test Factories ─────────────────────────────────────────
 
