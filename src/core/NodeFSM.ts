@@ -8,7 +8,7 @@
 type StateId =
   | 0x0 | 0x1 | 0x2 | 0x3 | 0x4
   | 0x5 | 0x6 | 0x7 | 0x8 | 0x9
-  | 0xA;
+  | 0xA | 0xB;
 
 const PENDING: StateId                      = 0x0;
 const READY: StateId                        = 0x1;
@@ -21,6 +21,7 @@ const PASSED: StateId                       = 0x7;
 const FAILED: StateId                       = 0x8;
 const SKIPPED: StateId                      = 0x9;
 const AWAITING_HUMAN: StateId               = 0xA;
+const AWAITING_ANSWER: StateId              = 0xB;
 
 export {
   PENDING,
@@ -34,6 +35,7 @@ export {
   FAILED,
   SKIPPED,
   AWAITING_HUMAN,
+  AWAITING_ANSWER,
 };
 
 export type { StateId };
@@ -45,7 +47,7 @@ import type { NodeStatus } from "../types/Pipeline.js";
 const STATE_NAMES: readonly [
   NodeStatus, NodeStatus, NodeStatus, NodeStatus, NodeStatus,
   NodeStatus, NodeStatus, NodeStatus, NodeStatus, NodeStatus,
-  NodeStatus,
+  NodeStatus, NodeStatus,
 ] = [
   "pending",                       // 0x0
   "ready",                         // 0x1
@@ -58,6 +60,7 @@ const STATE_NAMES: readonly [
   "failed",                        // 0x8
   "skipped",                       // 0x9
   "awaiting_human",                // 0xA
+  "awaiting_answer",               // 0xB
 ];
 
 const STATE_IDS: ReadonlyMap<NodeStatus, StateId> = new Map<NodeStatus, StateId>([
@@ -72,6 +75,7 @@ const STATE_IDS: ReadonlyMap<NodeStatus, StateId> = new Map<NodeStatus, StateId>
   ["failed",                        FAILED],
   ["skipped",                       SKIPPED],
   ["awaiting_human",                AWAITING_HUMAN],
+  ["awaiting_answer",               AWAITING_ANSWER],
 ]);
 
 // ── Transition event types ──────────────────────────────────────────
@@ -93,6 +97,8 @@ type TransitionEvent =
   | "HUMAN_GATE"             // running → awaiting_human
   | "HUMAN_APPROVED"         // awaiting_human → passed
   | "HUMAN_REJECTED"         // awaiting_human → failed
+  | "AGENT_QUESTION"         // running → awaiting_answer (agent asked a question)
+  | "ANSWER_RECEIVED"        // awaiting_answer → running (user answered)
   | "RETRY"                  // failed → pending (retry after transient failure)
   | "SKIP";                  // any → skipped
 
@@ -127,6 +133,10 @@ const TRANSITIONS: ReadonlyMap<TransitionKey, StateId> = new Map<TransitionKey, 
   [`${AWAITING_IMPLEMENTATION_REVIEW}:IMPL_APPROVED`, PASSED],
   [`${AWAITING_IMPLEMENTATION_REVIEW}:IMPL_REJECTED`, RUNNING],
 
+  // ── Agent question path ────────────────────────────────────────────
+  [`${RUNNING}:AGENT_QUESTION`,                      AWAITING_ANSWER],
+  [`${AWAITING_ANSWER}:ANSWER_RECEIVED`,             RUNNING],
+
   // ── Retry (from failed state) ──────────────────────────────────────
   [`${FAILED}:RETRY`,                                PENDING],
 
@@ -139,6 +149,7 @@ const TRANSITIONS: ReadonlyMap<TransitionKey, StateId> = new Map<TransitionKey, 
   [`${IMPLEMENTING}:SKIP`,                          SKIPPED],
   [`${AWAITING_IMPLEMENTATION_REVIEW}:SKIP`,        SKIPPED],
   [`${AWAITING_HUMAN}:SKIP`,                        SKIPPED],
+  [`${AWAITING_ANSWER}:SKIP`,                       SKIPPED],
 ]);
 
 // ── Terminal state check ────────────────────────────────────────────
@@ -155,6 +166,7 @@ const PAUSE_STATES: ReadonlySet<StateId> = new Set<StateId>([
   AWAITING_PROPOSAL_REVIEW,
   AWAITING_IMPLEMENTATION_REVIEW,
   AWAITING_HUMAN,
+  AWAITING_ANSWER,
 ]);
 
 // ── Node FSM ────────────────────────────────────────────────────────
