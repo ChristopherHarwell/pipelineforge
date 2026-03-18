@@ -19,6 +19,7 @@ execution:
     - Glob
     - Grep
   output_format: json
+requires_repo: false
 depends_on:
   - project-init
 gate:

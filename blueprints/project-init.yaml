@@ -20,6 +20,7 @@ execution:
     - Grep
     - Bash
   output_format: json
+requires_repo: false
 gate:
   type: quality
   quality_checks:
