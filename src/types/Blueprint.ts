@@ -72,6 +72,7 @@ export const BlueprintSchema = z.object({
   outputs: OutputsSchema.default({}),
   docker: DockerOverridesSchema.optional(),
   review_mode: ReviewModeSchema.default({ enabled: false }),
+  requires_repo: z.boolean().default(true),
 });
 
 export type Blueprint = Readonly<z.infer<typeof BlueprintSchema>>;
