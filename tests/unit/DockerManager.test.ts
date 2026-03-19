@@ -43,6 +43,7 @@ function createConfig(overrides?: Partial<DockerConfig>): DockerConfig {
     pipelineId: `pf-${String(createStableTestId("pipeline").value)}`,
     imageName: "pipelineforge-claude:latest",
     claudeDir: "/home/user/.claude",
+    claudeJsonPath: "/home/user/.claude.json",
     repoDir: "/projects/my-repo",
     notesDir: "/notes",
     stateDir: "/state",

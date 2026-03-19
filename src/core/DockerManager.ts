@@ -5,6 +5,7 @@ import type { Blueprint } from "@pftypes/Blueprint.ts";
 import type { DagNode } from "@pftypes/Graph.ts";
 import type { ContainerResult } from "@pftypes/Pipeline.ts";
 import type { PipelineLogger } from "@pftypes/Logger.ts";
+import type { ExecutionBackend, SpawnOptions } from "@pftypes/ExecutionBackend.ts";
 
 // ── Docker Config ───────────────────────────────────────────────────
 
@@ -12,26 +13,18 @@ export interface DockerConfig {
   readonly pipelineId: string;
   readonly imageName: string;
   readonly claudeDir: string;
+  readonly claudeJsonPath: string;
   readonly repoDir: string;
   readonly notesDir: string;
   readonly stateDir: string;
 }
 
-// ── Spawn Options ───────────────────────────────────────────────────
-
-export interface SpawnOptions {
-  readonly node: DagNode;
-  readonly blueprint: Blueprint;
-  readonly prompt: string;
-  readonly worktreePath?: string;
-  readonly dryRun?: boolean;
-}
-
 // ── Docker Manager ──────────────────────────────────────────────────
 // Manages Docker container lifecycle for blueprint execution.
 // Uses dockerode for programmatic Docker API access.
+// Implements ExecutionBackend for use as a pluggable execution layer.
 
-export class DockerManager {
+export class DockerManager implements ExecutionBackend {
   private readonly config: DockerConfig;
   private readonly logger: PipelineLogger | null;
   private readonly activeContainers: Map<string, string> = new Map();
@@ -181,6 +174,7 @@ export class DockerManager {
   ): string[] {
     const mounts: string[] = [
       `${this.config.claudeDir}:/home/claude/.claude:ro`,
+      `${this.config.claudeJsonPath}:/home/claude/.claude.json:ro`,
       `${this.config.notesDir}:/notes:rw`,
       `${this.config.stateDir}:/state:ro`,
     ];
@@ -215,9 +209,22 @@ export class DockerManager {
       `PIPELINEFORGE_NODE_ID=${node.id}`,
     ];
 
-    // Forward API key from host environment
-    if (process.env["ANTHROPIC_API_KEY"] !== undefined) {
-      env.push(`ANTHROPIC_API_KEY=${process.env["ANTHROPIC_API_KEY"]}`);
+    // Forward Claude Code authentication from host environment.
+    // Priority: CLAUDE_CODE_USE_BEDROCK/CLAUDE_CODE_USE_VERTEX auth tokens
+    // (set by `claude setup-token`) take precedence over ANTHROPIC_API_KEY.
+    const CLAUDE_AUTH_VARS: ReadonlyArray<string> = [
+      "ANTHROPIC_API_KEY",
+      "CLAUDE_CODE_USE_BEDROCK",
+      "CLAUDE_CODE_USE_VERTEX",
+      "ANTHROPIC_AUTH_TOKEN",
+      "CLAUDE_API_KEY",
+    ];
+
+    for (const varName of CLAUDE_AUTH_VARS) {
+      const value: string | undefined = process.env[varName];
+      if (value !== undefined) {
+        env.push(`${varName}=${value}`);
+      }
     }
 
     if (blueprint.docker?.env !== undefined) {

@@ -2,7 +2,7 @@
 
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
@@ -28,6 +28,7 @@ import { TemplateEngine } from "@utils/TemplateEngine.ts";
 import { loadPipelineConfig } from "@core/PipelineConfigLoader.ts";
 import { ConsoleLogger } from "@utils/ConsoleLogger.ts";
 import type { PipelineLogger } from "@pftypes/Logger.ts";
+import type { ExecutionBackend } from "@pftypes/ExecutionBackend.ts";
 import { OpenClawClient } from "@core/OpenClawClient.ts";
 import { NotificationRouter } from "@core/NotificationRouter.ts";
 import { OpenClawConfigSchema } from "@pftypes/Discord.ts";
@@ -35,6 +36,20 @@ import type { OpenClawConfig } from "@pftypes/Discord.ts";
 import { toThreadId } from "@pftypes/Discord.ts";
 import type { DiscordThreadId } from "@pftypes/Discord.ts";
 import type { NotificationChannel } from "@pftypes/NotificationChannel.ts";
+import { ProxyContainerManager } from "@core/ProxyContainerManager.ts";
+import { ProxySessionManager } from "@core/ProxySessionManager.ts";
+import { ProxyConfigGenerator } from "@core/ProxyConfigGenerator.ts";
+import type { ProxyContainerConfig } from "@pftypes/ProxySession.ts";
+import type { InputChannel, UserInput } from "@pftypes/InputChannel.ts";
+import { CliInputChannel } from "@core/CliInputChannel.ts";
+import { DiscordInputChannel } from "@core/DiscordInputChannel.ts";
+import { InputRacer } from "@core/InputRacer.ts";
+import type { ChildProcess } from "node:child_process";
+import { discoverSkills } from "@core/SkillFrontmatterParser.ts";
+import { BlueprintSyncer } from "@core/BlueprintSyncer.ts";
+import { OpenClawConfigSyncer } from "@core/OpenClawConfigSyncer.ts";
+import { generateLobsterWorkflow } from "@core/LobsterWorkflowGenerator.ts";
+import type { SyncReport, SyncEntry } from "@pftypes/SyncResult.ts";
 
 const execFileAsync: typeof execFile.__promisify__ = promisify(execFile);
 
@@ -58,6 +73,10 @@ const DEFAULT_STATE_DIR: string = resolve(
 const DEFAULT_CLAUDE_DIR: string = resolve(
   process.env["HOME"] ?? "/tmp",
   ".claude",
+);
+const DEFAULT_CLAUDE_JSON_PATH: string = resolve(
+  process.env["HOME"] ?? "/tmp",
+  ".claude.json",
 );
 const DEFAULT_IMAGE_NAME: string = "pipelineforge-claude";
 
@@ -95,6 +114,10 @@ program
   .option("--pipelines-dir <path>", "Pipelines directory", DEFAULT_PIPELINES_DIR)
   .option("--state-dir <path>", "State directory", DEFAULT_STATE_DIR)
   .option("--image <name>", "Docker image name", DEFAULT_IMAGE_NAME)
+  .option("--proxy", "Use OpenClaw proxy container as execution backend", false)
+  .option("--proxy-image <name>", "OpenClaw proxy container image", "openclaw/gateway:latest")
+  .option("--proxy-port <port>", "Proxy gateway port", "18789")
+  .option("--docker-socket <path>", "Docker socket path", "/var/run/docker.sock")
   .option("--discord", "Enable Discord notifications via OpenClaw", false)
   .option("--discord-channel <id>", "Discord forum channel ID")
   .option("--openclaw-url <url>", "OpenClaw gateway URL", process.env["OPENCLAW_URL"] ?? "http://127.0.0.1:18789")
@@ -110,6 +133,10 @@ program
     readonly pipelinesDir: string;
     readonly stateDir: string;
     readonly image: string;
+    readonly proxy: boolean;
+    readonly proxyImage: string;
+    readonly proxyPort: string;
+    readonly dockerSocket: string;
     readonly discord: boolean;
     readonly discordChannel: string | undefined;
     readonly openclawUrl: string;
@@ -191,15 +218,6 @@ program
 
     const logger: PipelineLogger = new ConsoleLogger();
 
-    const dockerManager: DockerManager = new DockerManager({
-      pipelineId,
-      imageName: opts.image,
-      claudeDir: DEFAULT_CLAUDE_DIR,
-      repoDir,
-      notesDir,
-      stateDir: opts.stateDir,
-    }, logger);
-
     const gateEvaluator: GateEvaluator = new GateEvaluator();
 
     const worktreeManager: WorktreeManager = new WorktreeManager({
@@ -209,6 +227,86 @@ program
 
     const templateEngine: TemplateEngine = new TemplateEngine();
     const promptBuilder: PromptBuilder = new PromptBuilder(templateEngine);
+
+    // ── Execution Backend ─────────────────────────────────────
+    let executionBackend: ExecutionBackend;
+    let proxyManager: ProxyContainerManager | null = null;
+
+    if (opts.proxy) {
+      // ── Path C: OpenClaw Proxy Container ────────────────────
+      const apiKey: string | undefined = process.env["ANTHROPIC_API_KEY"];
+      if (apiKey === undefined || apiKey.length === 0) {
+        console.error(
+          "Proxy mode requires ANTHROPIC_API_KEY environment variable.",
+        );
+        process.exit(1);
+      }
+
+      const proxyPort: number = parseInt(opts.proxyPort, 10);
+      const configPath: string = resolve(opts.stateDir, pipelineId, "openclaw.json");
+
+      // Generate openclaw.json config
+      const configGenerator: ProxyConfigGenerator = new ProxyConfigGenerator({
+        workerImage: opts.image,
+        hostRepoDir: repoDir,
+        hostNotesDir: notesDir,
+        hostStateDir: opts.stateDir,
+        hostClaudeDir: DEFAULT_CLAUDE_DIR,
+      });
+
+      const gatewayConfig = configGenerator.generate(
+        graph,
+        registry,
+        maxConcurrent,
+        opts.discordChannel,
+      );
+
+      // Write openclaw.json to state directory
+      const configDir: string = resolve(opts.stateDir, pipelineId);
+      await mkdir(configDir, { recursive: true });
+      await writeFile(configPath, configGenerator.serialize(gatewayConfig));
+
+      console.log(`  Backend:        proxy (OpenClaw gateway)`);
+      console.log(`  Proxy image:    ${opts.proxyImage}`);
+      console.log(`  Proxy port:     ${String(proxyPort)}`);
+      console.log(`  Config:         ${configPath}`);
+
+      // Start proxy container
+      const proxyConfig: ProxyContainerConfig = {
+        pipelineId,
+        containerName: `pf-proxy-${pipelineId}`,
+        openclawImage: opts.proxyImage,
+        gatewayPort: proxyPort,
+        anthropicApiKey: apiKey,
+        configPath,
+        repoDir,
+        notesDir,
+        stateDir: opts.stateDir,
+        claudeDir: DEFAULT_CLAUDE_DIR,
+        dockerSocketPath: opts.dockerSocket,
+      };
+
+      proxyManager = new ProxyContainerManager(proxyConfig, logger);
+      await proxyManager.start();
+
+      executionBackend = new ProxySessionManager(
+        proxyManager.getGatewayUrl(),
+        logger,
+      );
+    } else {
+      // ── Path A: Direct Docker containers ────────────────────
+      executionBackend = new DockerManager({
+        pipelineId,
+        imageName: opts.image,
+        claudeDir: DEFAULT_CLAUDE_DIR,
+        claudeJsonPath: DEFAULT_CLAUDE_JSON_PATH,
+        repoDir,
+        notesDir,
+        stateDir: opts.stateDir,
+      }, logger);
+
+      console.log(`  Backend:        docker (direct containers)`);
+    }
 
     // ── Notification Channel ─────────────────────────────────
     let notificationRouter: NotificationRouter | null = null;
@@ -232,8 +330,13 @@ program
         process.exit(1);
       }
 
+      // When using proxy mode, point OpenClaw client at the proxy gateway
+      const openclawUrl: string = opts.proxy && proxyManager !== null
+        ? proxyManager.getGatewayUrl()
+        : opts.openclawUrl;
+
       const openclawConfig: OpenClawConfig = OpenClawConfigSchema.parse({
-        gateway_url: opts.openclawUrl,
+        gateway_url: openclawUrl,
         bearer_token: bearerToken,
         forum_channel_id: opts.discordChannel,
       });
@@ -259,8 +362,21 @@ program
       console.log(`  Discord:        enabled (thread: ${String(threadId)})`);
     }
 
+    // ── Input Racer (streaming HITL) ─────────────────────────
+    let inputRacer: InputRacer | null = null;
+
+    if (opts.proxy) {
+      const channels: InputChannel[] = [new CliInputChannel()];
+      if (notificationRouter !== null) {
+        channels.push(
+          new DiscordInputChannel(notificationRouter, pipelineId, "pipeline"),
+        );
+      }
+      inputRacer = new InputRacer(channels);
+    }
+
     const executor: DagExecutor = new DagExecutor(
-      dockerManager,
+      executionBackend,
       gateEvaluator,
       stateManager,
       worktreeManager,
@@ -268,6 +384,7 @@ program
       logger,
       { maxConcurrent, reviewTiming },
       notificationRouter,
+      inputRacer,
     );
 
     // ── Execute ─────────────────────────────────────────────────
@@ -275,15 +392,26 @@ program
     console.log("Executing pipeline...");
     console.log("─".repeat(56));
 
-    const result: ExecutionResult = await executor.execute(
-      graph,
-      registry,
-      initialState,
-    );
+    try {
+      const result: ExecutionResult = await executor.execute(
+        graph,
+        registry,
+        initialState,
+      );
 
-    // ── Report ──────────────────────────────────────────────────
-    console.log("");
-    printPipelineResult(result);
+      // ── Report ────────────────────────────────────────────────
+      console.log("");
+      printPipelineResult(result);
+    } finally {
+      // ── Input cleanup ──────────────────────────────────────────
+      if (inputRacer !== null) {
+        inputRacer.close();
+      }
+      // ── Proxy cleanup ─────────────────────────────────────────
+      if (proxyManager !== null) {
+        await proxyManager.stop();
+      }
+    }
   });
 
 // ── resume command ──────────────────────────────────────────────────
@@ -296,6 +424,10 @@ program
   .option("--blueprints-dir <path>", "Blueprints directory", DEFAULT_BLUEPRINTS_DIR)
   .option("--pipelines-dir <path>", "Pipelines directory", DEFAULT_PIPELINES_DIR)
   .option("--image <name>", "Docker image name", DEFAULT_IMAGE_NAME)
+  .option("--proxy", "Use OpenClaw proxy container as execution backend", false)
+  .option("--proxy-image <name>", "OpenClaw proxy container image", "openclaw/gateway:latest")
+  .option("--proxy-port <port>", "Proxy gateway port", "18789")
+  .option("--docker-socket <path>", "Docker socket path", "/var/run/docker.sock")
   .option("--discord", "Enable Discord notifications via OpenClaw", false)
   .option("--discord-channel <id>", "Discord forum channel ID")
   .option("--openclaw-url <url>", "OpenClaw gateway URL", process.env["OPENCLAW_URL"] ?? "http://127.0.0.1:18789")
@@ -306,6 +438,10 @@ program
     readonly blueprintsDir: string;
     readonly pipelinesDir: string;
     readonly image: string;
+    readonly proxy: boolean;
+    readonly proxyImage: string;
+    readonly proxyPort: string;
+    readonly dockerSocket: string;
     readonly discord: boolean;
     readonly discordChannel: string | undefined;
     readonly openclawUrl: string;
@@ -348,21 +484,33 @@ program
     // ── Rebuild executor ────────────────────────────────────────
     const resumeLogger: PipelineLogger = new ConsoleLogger();
 
-    const dockerManager: DockerManager = new DockerManager({
-      pipelineId: opts.id,
-      imageName: opts.image,
-      claudeDir: DEFAULT_CLAUDE_DIR,
-      repoDir: state.repo_dir,
-      notesDir: state.notes_dir,
-      stateDir: opts.stateDir,
-    }, resumeLogger);
+    const resumeBackend: ExecutionBackend = buildExecutionBackend(
+      opts,
+      opts.id,
+      state.repo_dir,
+      state.notes_dir,
+      resumeLogger,
+    );
 
     // ── Notification Channel ─────────────────────────────────
     const resumeNotificationRouter: NotificationRouter | null =
       buildNotificationRouter(opts, resumeLogger, state.discord_thread_id);
 
+    // ── Input Racer (streaming HITL) ─────────────────────────
+    let resumeInputRacer: InputRacer | null = null;
+
+    if (opts.proxy) {
+      const channels: InputChannel[] = [new CliInputChannel()];
+      if (resumeNotificationRouter !== null) {
+        channels.push(
+          new DiscordInputChannel(resumeNotificationRouter, opts.id, "pipeline"),
+        );
+      }
+      resumeInputRacer = new InputRacer(channels);
+    }
+
     const executor: DagExecutor = new DagExecutor(
-      dockerManager,
+      resumeBackend,
       new GateEvaluator(),
       stateManager,
       new WorktreeManager({ repoDir: state.repo_dir, pipelineId: opts.id }),
@@ -373,6 +521,7 @@ program
         reviewTiming: state.review_timing,
       },
       resumeNotificationRouter,
+      resumeInputRacer,
     );
 
     // ── Resume execution ────────────────────────────────────────
@@ -380,14 +529,20 @@ program
     console.log("Resuming pipeline...");
     console.log("─".repeat(56));
 
-    const result: ExecutionResult = await executor.execute(
-      graph,
-      registry,
-      state,
-    );
+    try {
+      const result: ExecutionResult = await executor.execute(
+        graph,
+        registry,
+        state,
+      );
 
-    console.log("");
-    printPipelineResult(result);
+      console.log("");
+      printPipelineResult(result);
+    } finally {
+      if (resumeInputRacer !== null) {
+        resumeInputRacer.close();
+      }
+    }
   });
 
 // ── retry command ───────────────────────────────────────────────────
@@ -401,6 +556,10 @@ program
   .option("--blueprints-dir <path>", "Blueprints directory", DEFAULT_BLUEPRINTS_DIR)
   .option("--pipelines-dir <path>", "Pipelines directory", DEFAULT_PIPELINES_DIR)
   .option("--image <name>", "Docker image name", DEFAULT_IMAGE_NAME)
+  .option("--proxy", "Use OpenClaw proxy container as execution backend", false)
+  .option("--proxy-image <name>", "OpenClaw proxy container image", "openclaw/gateway:latest")
+  .option("--proxy-port <port>", "Proxy gateway port", "18789")
+  .option("--docker-socket <path>", "Docker socket path", "/var/run/docker.sock")
   .option("--discord", "Enable Discord notifications via OpenClaw", false)
   .option("--discord-channel <id>", "Discord forum channel ID")
   .option("--openclaw-url <url>", "OpenClaw gateway URL", process.env["OPENCLAW_URL"] ?? "http://127.0.0.1:18789")
@@ -412,6 +571,10 @@ program
     readonly blueprintsDir: string;
     readonly pipelinesDir: string;
     readonly image: string;
+    readonly proxy: boolean;
+    readonly proxyImage: string;
+    readonly proxyPort: string;
+    readonly dockerSocket: string;
     readonly discord: boolean;
     readonly discordChannel: string | undefined;
     readonly openclawUrl: string;
@@ -470,21 +633,33 @@ program
     // ── Rebuild executor ────────────────────────────────────────
     const retryLogger: PipelineLogger = new ConsoleLogger();
 
-    const dockerManager: DockerManager = new DockerManager({
-      pipelineId: opts.id,
-      imageName: opts.image,
-      claudeDir: DEFAULT_CLAUDE_DIR,
-      repoDir: resetState.repo_dir,
-      notesDir: resetState.notes_dir,
-      stateDir: opts.stateDir,
-    }, retryLogger);
+    const retryBackend: ExecutionBackend = buildExecutionBackend(
+      opts,
+      opts.id,
+      resetState.repo_dir,
+      resetState.notes_dir,
+      retryLogger,
+    );
 
     // ── Notification Channel ─────────────────────────────────
     const retryNotificationRouter: NotificationRouter | null =
       buildNotificationRouter(opts, retryLogger, resetState.discord_thread_id);
 
+    // ── Input Racer (streaming HITL) ─────────────────────────
+    let retryInputRacer: InputRacer | null = null;
+
+    if (opts.proxy) {
+      const channels: InputChannel[] = [new CliInputChannel()];
+      if (retryNotificationRouter !== null) {
+        channels.push(
+          new DiscordInputChannel(retryNotificationRouter, opts.id, "pipeline"),
+        );
+      }
+      retryInputRacer = new InputRacer(channels);
+    }
+
     const executor: DagExecutor = new DagExecutor(
-      dockerManager,
+      retryBackend,
       new GateEvaluator(),
       stateManager,
       new WorktreeManager({ repoDir: resetState.repo_dir, pipelineId: opts.id }),
@@ -495,6 +670,7 @@ program
         reviewTiming: resetState.review_timing,
       },
       retryNotificationRouter,
+      retryInputRacer,
     );
 
     // ── Execute ─────────────────────────────────────────────────
@@ -502,14 +678,20 @@ program
     console.log("Retrying pipeline...");
     console.log("─".repeat(56));
 
-    const result: ExecutionResult = await executor.execute(
-      graph,
-      registry,
-      resetState,
-    );
+    try {
+      const result: ExecutionResult = await executor.execute(
+        graph,
+        registry,
+        resetState,
+      );
 
-    console.log("");
-    printPipelineResult(result);
+      console.log("");
+      printPipelineResult(result);
+    } finally {
+      if (retryInputRacer !== null) {
+        retryInputRacer.close();
+      }
+    }
   });
 
 // ── status command ──────────────────────────────────────────────────
@@ -593,9 +775,367 @@ program
     }
   });
 
+// ── watch command ──────────────────────────────────────────────────
+
+program
+  .command("watch")
+  .description("Attach to a running pipeline interactively")
+  .requiredOption("--id <pipeline-id>", "Pipeline ID to watch")
+  .option("--state-dir <path>", "State directory", DEFAULT_STATE_DIR)
+  .option("--proxy-port <port>", "Proxy gateway port", "18789")
+  .option("--discord", "Enable Discord input channel", false)
+  .option("--discord-channel <id>", "Discord forum channel ID")
+  .option("--openclaw-url <url>", "OpenClaw gateway URL", process.env["OPENCLAW_URL"] ?? "http://127.0.0.1:18789")
+  .option("--openclaw-token <token>", "OpenClaw bearer token (or OPENCLAW_TOKEN env var)")
+  .action(async (opts: {
+    readonly id: string;
+    readonly stateDir: string;
+    readonly proxyPort: string;
+    readonly discord: boolean;
+    readonly discordChannel: string | undefined;
+    readonly openclawUrl: string;
+    readonly openclawToken: string | undefined;
+  }): Promise<void> => {
+    console.log("╔══════════════════════════════════════════════════════╗");
+    console.log("║              PipelineForge — watch                  ║");
+    console.log("╚══════════════════════════════════════════════════════╝");
+    console.log(`  Pipeline ID: ${opts.id}`);
+
+    // ── Load persisted state ────────────────────────────────────
+    const stateManager: StateManager = new StateManager(opts.stateDir);
+    const state: PipelineState = await stateManager.load(opts.id);
+
+    console.log(`  Feature:     ${state.feature}`);
+    console.log(`  Status:      ${state.status}`);
+    console.log("");
+
+    if (state.status === "completed" || state.status === "failed") {
+      console.log(`Pipeline is already ${state.status}. Nothing to watch.`);
+      printPipelineDetail(state);
+      return;
+    }
+
+    // ── Build input channels ────────────────────────────────────
+    const watchLogger: PipelineLogger = new ConsoleLogger();
+
+    let watchNotificationRouter: NotificationRouter | null = null;
+    if (opts.discord) {
+      watchNotificationRouter = buildNotificationRouter(
+        opts,
+        watchLogger,
+        state.discord_thread_id,
+      );
+    }
+
+    const channels: InputChannel[] = [new CliInputChannel()];
+    if (watchNotificationRouter !== null) {
+      channels.push(
+        new DiscordInputChannel(watchNotificationRouter, opts.id, "pipeline"),
+      );
+    }
+    const inputRacer: InputRacer = new InputRacer(channels);
+
+    // ── Find active and awaiting nodes ──────────────────────────
+    const runningNodes: ReadonlyArray<NodeState> = state.nodes.filter(
+      (n: NodeState): boolean => n.status === "running",
+    );
+    const awaitingNodes: ReadonlyArray<NodeState> = state.nodes.filter(
+      (n: NodeState): boolean => n.status === "awaiting_answer",
+    );
+
+    console.log(
+      `  Running nodes:  ${String(runningNodes.length)} | ` +
+      `Awaiting answer: ${String(awaitingNodes.length)}`,
+    );
+    console.log("─".repeat(56));
+
+    const proxyPort: number = parseInt(opts.proxyPort, 10);
+    const gatewayUrl: string = `http://127.0.0.1:${String(proxyPort)}`;
+
+    try {
+      // ── Attach to running nodes via openclaw stream ─────────
+      const streamProcesses: ChildProcess[] = [];
+
+      for (const node of runningNodes) {
+        console.log(`  Streaming output for ${node.id}...`);
+
+        const child: ChildProcess = (await import("node:child_process")).spawn(
+          "openclaw",
+          ["sessions", "stream", "--agent", node.id, "--gateway", gatewayUrl],
+        );
+
+        streamProcesses.push(child);
+
+        if (child.stdout !== null) {
+          watchLogger.streamContainerOutput(node.id, child.stdout as import("node:stream").Readable);
+        }
+      }
+
+      // ── Handle awaiting_answer nodes immediately ──────────────
+      for (const node of awaitingNodes) {
+        const question: string =
+          node.output !== null
+            ? node.output.split("\n").slice(-10).join("\n")
+            : `Node ${node.id} is awaiting your answer.`;
+
+        console.log(`\n  Node ${node.id} has a pending question:`);
+
+        const input: UserInput = await inputRacer.race(question);
+
+        // Inject answer via openclaw CLI
+        try {
+          await execFileAsync("openclaw", [
+            "sessions",
+            "message",
+            "--agent",
+            node.id,
+            "--message",
+            input.content,
+            "--gateway",
+            gatewayUrl,
+          ]);
+          console.log(`  Answer sent to ${node.id} via ${input.source}`);
+        } catch (err: unknown) {
+          const message: string =
+            err instanceof Error ? err.message : "Unknown error";
+          console.error(`  Failed to send answer to ${node.id}: ${message}`);
+        }
+      }
+
+      // ── Wait for user to Ctrl+C ──────────────────────────────
+      if (runningNodes.length > 0) {
+        console.log("\n  Watching pipeline output. Press Ctrl+C to detach.\n");
+
+        await new Promise<void>((_resolve: () => void): void => {
+          process.on("SIGINT", (): void => {
+            console.log("\n  Detaching from pipeline...");
+            for (const child of streamProcesses) {
+              child.kill("SIGTERM");
+            }
+            _resolve();
+          });
+        });
+      }
+    } finally {
+      inputRacer.close();
+    }
+  });
+
+// ── sync command ───────────────────────────────────────────────────
+
+const DEFAULT_SKILL_DIR: string = resolve(
+  process.env["HOME"] ?? "/tmp",
+  ".claude",
+  "skills",
+);
+
+program
+  .command("sync")
+  .description("Sync blueprints from SKILL.md frontmatter and optionally generate OpenClaw config")
+  .option("--skill-dir <path>", "Skill definitions directory", DEFAULT_SKILL_DIR)
+  .option("--blueprint-dir <path>", "Blueprints output directory", DEFAULT_BLUEPRINTS_DIR)
+  .option("--generate-config", "Also generate openclaw.json from synced blueprints", false)
+  .option("--generate-lobster", "Also generate .lobster workflow files", false)
+  .option("--pipeline <name>", "Pipeline template for config/lobster generation", "full-sdlc")
+  .option("--pipelines-dir <path>", "Pipelines directory", DEFAULT_PIPELINES_DIR)
+  .option("--config-output <path>", "Output path for openclaw.json")
+  .option("--lobster-output <path>", "Output path for .lobster workflow file")
+  .option("--image <name>", "Docker worker image name", DEFAULT_IMAGE_NAME)
+  .option("--repo-dir <path>", "Host repo directory for OpenClaw mounts")
+  .option("--notes-dir <path>", "Host notes directory for OpenClaw mounts")
+  .option("--state-dir <path>", "State directory", DEFAULT_STATE_DIR)
+  .option("--max-concurrent <n>", "Max concurrent OpenClaw sessions", "20")
+  .option("--discord-channel <id>", "Discord channel ID for OpenClaw config")
+  .action(async (opts: {
+    readonly skillDir: string;
+    readonly blueprintDir: string;
+    readonly generateConfig: boolean;
+    readonly generateLobster: boolean;
+    readonly pipeline: string;
+    readonly pipelinesDir: string;
+    readonly configOutput: string | undefined;
+    readonly lobsterOutput: string | undefined;
+    readonly image: string;
+    readonly repoDir: string | undefined;
+    readonly notesDir: string | undefined;
+    readonly stateDir: string;
+    readonly maxConcurrent: string;
+    readonly discordChannel: string | undefined;
+  }): Promise<void> => {
+    console.log("╔══════════════════════════════════════════════════════╗");
+    console.log("║              PipelineForge — sync                   ║");
+    console.log("╚══════════════════════════════════════════════════════╝");
+    console.log(`  Skill dir:      ${opts.skillDir}`);
+    console.log(`  Blueprint dir:  ${opts.blueprintDir}`);
+    console.log("");
+
+    // ── Discover skills ──────────────────────────────────────────
+    console.log("Discovering skills...");
+    const skills = await discoverSkills(opts.skillDir);
+    console.log(`  Found ${String(skills.length)} skills`);
+
+    // ── Sync blueprints ──────────────────────────────────────────
+    console.log("Syncing blueprints...");
+    const syncer: BlueprintSyncer = new BlueprintSyncer();
+    const report: SyncReport = await syncer.sync(skills, opts.blueprintDir);
+
+    // ── Print report ─────────────────────────────────────────────
+    console.log("");
+    console.log("Sync Report:");
+    console.log("─".repeat(56));
+
+    for (const entry of report.entries) {
+      const icon: string = syncOutcomeIcon(entry.outcome);
+      console.log(`  ${icon} ${entry.name as string} — ${entry.outcome}: ${entry.detail}`);
+    }
+
+    const created: number = report.entries.filter(
+      (e: SyncEntry): boolean => e.outcome === "created",
+    ).length;
+    const updated: number = report.entries.filter(
+      (e: SyncEntry): boolean => e.outcome === "updated",
+    ).length;
+    const unchanged: number = report.entries.filter(
+      (e: SyncEntry): boolean => e.outcome === "unchanged",
+    ).length;
+    const errors: number = report.entries.filter(
+      (e: SyncEntry): boolean => e.outcome === "error",
+    ).length;
+
+    console.log("");
+    console.log(
+      `  Created: ${String(created)} | Updated: ${String(updated)} | ` +
+      `Unchanged: ${String(unchanged)} | Errors: ${String(errors)}`,
+    );
+
+    // ── Generate OpenClaw config ─────────────────────────────────
+    if (opts.generateConfig) {
+      console.log("");
+      console.log("Generating OpenClaw config...");
+
+      const pipelineConfig: PipelineConfig = await loadPipelineConfig(
+        opts.pipelinesDir,
+        opts.pipeline,
+      );
+
+      const registry: BlueprintRegistry = new BlueprintRegistry();
+      await registry.loadFromDirectory(opts.blueprintDir);
+
+      const repoDir: string = opts.repoDir ?? resolve(opts.stateDir, "repo");
+      const notesDir: string = opts.notesDir ?? resolve(opts.stateDir, "notes");
+      const maxConcurrent: number = parseInt(opts.maxConcurrent, 10);
+
+      const configSyncer: OpenClawConfigSyncer = new OpenClawConfigSyncer({
+        workerImage: opts.image,
+        hostRepoDir: repoDir,
+        hostNotesDir: notesDir,
+        hostStateDir: opts.stateDir,
+        hostClaudeDir: DEFAULT_CLAUDE_DIR,
+        maxConcurrent,
+      });
+
+      const gatewayConfig = configSyncer.generate(
+        registry.all(),
+        pipelineConfig.blueprints,
+        opts.discordChannel,
+      );
+
+      const outputPath: string = opts.configOutput ?? resolve(
+        opts.stateDir,
+        "openclaw.json",
+      );
+
+      await configSyncer.writeConfig(gatewayConfig, outputPath);
+      console.log(`  Written to: ${outputPath}`);
+      console.log(`  Agents: ${String(gatewayConfig.agents.list.length)}`);
+    }
+
+    // ── Generate Lobster workflow ──────────────────────────────────
+    if (opts.generateLobster) {
+      console.log("");
+      console.log("Generating Lobster workflow...");
+
+      // Load pipeline config if not already loaded
+      const lobsterPipelineConfig: PipelineConfig = await loadPipelineConfig(
+        opts.pipelinesDir,
+        opts.pipeline,
+      );
+
+      const lobsterRegistry: BlueprintRegistry = new BlueprintRegistry();
+      await lobsterRegistry.loadFromDirectory(opts.blueprintDir);
+
+      const lobsterYaml: string = generateLobsterWorkflow(
+        lobsterPipelineConfig,
+        lobsterRegistry.all(),
+      );
+
+      const lobsterPath: string = opts.lobsterOutput ?? resolve(
+        DEFAULT_PIPELINES_DIR,
+        `${opts.pipeline}.lobster`,
+      );
+
+      await writeFile(lobsterPath, lobsterYaml, "utf-8");
+      console.log(`  Written to: ${lobsterPath}`);
+      console.log(`  Steps: ${String(lobsterPipelineConfig.blueprints.length)}`);
+    }
+
+    console.log("");
+    console.log(`Timestamp: ${report.timestamp}`);
+  });
+
 program.parse();
 
 // ── Helpers ─────────────────────────────────────────────────────────
+
+function syncOutcomeIcon(outcome: string): string {
+  switch (outcome) {
+    case "created":
+      return "+";
+    case "updated":
+      return "~";
+    case "unchanged":
+      return "=";
+    case "error":
+      return "!";
+    default:
+      return "?";
+  }
+}
+
+// ── Execution Backend Builder ────────────────────────────────────────
+
+interface ProxyOpts {
+  readonly proxy: boolean;
+  readonly proxyPort: string;
+  readonly image: string;
+  readonly stateDir: string;
+}
+
+function buildExecutionBackend(
+  opts: ProxyOpts,
+  pipelineId: string,
+  repoDir: string,
+  notesDir: string,
+  logger: PipelineLogger,
+): ExecutionBackend {
+  if (opts.proxy) {
+    const proxyPort: number = parseInt(opts.proxyPort, 10);
+    const gatewayUrl: string = `http://127.0.0.1:${String(proxyPort)}`;
+    return new ProxySessionManager(gatewayUrl, logger);
+  }
+
+  return new DockerManager({
+    pipelineId,
+    imageName: opts.image,
+    claudeDir: DEFAULT_CLAUDE_DIR,
+    claudeJsonPath: DEFAULT_CLAUDE_JSON_PATH,
+    repoDir,
+    notesDir,
+    stateDir: opts.stateDir,
+  }, logger);
+}
+
+// ── Notification Router Builder ─────────────────────────────────────
 
 interface DiscordOpts {
   readonly discord: boolean;

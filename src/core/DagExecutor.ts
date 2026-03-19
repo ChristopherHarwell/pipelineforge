@@ -6,8 +6,13 @@ import type {
   PipelineState,
   ReviewTiming,
 } from "@pftypes/Pipeline.ts";
+import type { ExecutionBackend } from "@pftypes/ExecutionBackend.ts";
+import { isStreamingBackend } from "@pftypes/StreamingBackend.ts";
+import type { StreamingExecutionBackend, StreamingSessionHandle, StreamCompletionEvent } from "@pftypes/StreamingBackend.ts";
+import type { InputRacer } from "@core/InputRacer.ts";
+import type { UserInput } from "@pftypes/InputChannel.ts";
+import { createInterface as createReadlineInterface } from "node:readline";
 import type { BlueprintRegistry } from "@core/BlueprintRegistry.ts";
-import type { DockerManager } from "@core/DockerManager.ts";
 import type { GateEvaluator, GateEvaluation } from "@core/GateEvaluator.ts";
 import type { StateManager } from "@core/StateManager.ts";
 import type { WorktreeManager, WorktreeInfo, MergeResult } from "@core/WorktreeManager.ts";
@@ -46,7 +51,7 @@ export interface ExecutionResult {
 // authority on valid state transitions.
 
 export class DagExecutor {
-  private readonly dockerManager: DockerManager;
+  private readonly executionBackend: ExecutionBackend;
   private readonly gateEvaluator: GateEvaluator;
   private readonly stateManager: StateManager;
   private readonly worktreeManager: WorktreeManager;
@@ -54,6 +59,7 @@ export class DagExecutor {
   private readonly logger: PipelineLogger;
   private readonly config: ExecutorConfig;
   private readonly notificationRouter: NotificationRouter | null;
+  private readonly inputRacer: InputRacer | null;
   private readonly responseResolver: ResponseResolver;
   private readonly questionDetector: QuestionDetector;
 
@@ -63,7 +69,7 @@ export class DagExecutor {
   private pipelineFSM: PipelineFSM | null = null;
 
   constructor(
-    dockerManager: DockerManager,
+    executionBackend: ExecutionBackend,
     gateEvaluator: GateEvaluator,
     stateManager: StateManager,
     worktreeManager: WorktreeManager,
@@ -71,8 +77,9 @@ export class DagExecutor {
     logger: PipelineLogger,
     config: ExecutorConfig,
     notificationRouter: NotificationRouter | null = null,
+    inputRacer: InputRacer | null = null,
   ) {
-    this.dockerManager = dockerManager;
+    this.executionBackend = executionBackend;
     this.gateEvaluator = gateEvaluator;
     this.stateManager = stateManager;
     this.worktreeManager = worktreeManager;
@@ -80,6 +87,7 @@ export class DagExecutor {
     this.logger = logger;
     this.config = config;
     this.notificationRouter = notificationRouter;
+    this.inputRacer = inputRacer;
     this.responseResolver = new ResponseResolver();
     this.questionDetector = new QuestionDetector();
   }
@@ -201,7 +209,7 @@ export class DagExecutor {
   async abort(state: PipelineState): Promise<PipelineState> {
     this.initializeFSMs(state);
 
-    await this.dockerManager.killAll();
+    await this.executionBackend.killAll();
     await this.worktreeManager.cleanupAll();
 
     // Skip all non-terminal nodes
@@ -279,6 +287,7 @@ export class DagExecutor {
 
   // ── Standard Execution Path ───────────────────────────────────────
   // RUNNING → (container) → GATE_PASSED | GATE_FAILED | HUMAN_GATE
+  // If the backend supports streaming, delegates to handleStreamingExecution().
 
   private async handleStandardExecution(
     node: DagNode,
@@ -286,12 +295,17 @@ export class DagExecutor {
     fsm: NodeFSM,
     state: PipelineState,
   ): Promise<NodeOutcome> {
+    // ── Streaming branch: real-time output + mid-execution Q&A ──
+    if (isStreamingBackend(this.executionBackend)) {
+      return this.handleStreamingExecution(node, blueprint, fsm, state);
+    }
+
     const prompt: string = await this.promptBuilder.buildPrompt(
       blueprint,
       this.buildContext(node, state, blueprint),
     );
 
-    const result: ContainerResult = await this.dockerManager.spawnContainer({
+    const result: ContainerResult = await this.executionBackend.spawnContainer({
       node,
       blueprint,
       prompt,
@@ -393,6 +407,180 @@ export class DagExecutor {
     };
   }
 
+  // ── Streaming Execution Path ─────────────────────────────────────
+  // RUNNING → (streaming session) → live output + question detection
+  // → AGENT_QUESTION → ANSWER_RECEIVED → continue → gate evaluation
+
+  private async handleStreamingExecution(
+    node: DagNode,
+    blueprint: Blueprint,
+    fsm: NodeFSM,
+    state: PipelineState,
+  ): Promise<NodeOutcome> {
+    const backend: StreamingExecutionBackend =
+      this.executionBackend as StreamingExecutionBackend;
+
+    const prompt: string = await this.promptBuilder.buildPrompt(
+      blueprint,
+      this.buildContext(node, state, blueprint),
+    );
+
+    const handle: StreamingSessionHandle = await backend.spawnStreamingSession({
+      node,
+      blueprint,
+      prompt,
+    });
+
+    // ── Stream output to console ────────────────────────────────
+    this.logger.streamContainerOutput(node.id, handle.outputStream);
+
+    // ── Line-by-line question detection on rolling window ───────
+    const ROLLING_WINDOW_SIZE: number = 20;
+    const rollingWindow: string[] = [];
+    const answeredQuestions: Set<string> = new Set();
+
+    const rl = createReadlineInterface({ input: handle.outputStream });
+
+    rl.on("line", async (line: string): Promise<void> => {
+      rollingWindow.push(line);
+      if (rollingWindow.length > ROLLING_WINDOW_SIZE) {
+        rollingWindow.shift();
+      }
+
+      // Run question detection on rolling window
+      const windowText: string = rollingWindow.join("\n");
+      const detection: QuestionDetectionResult =
+        this.questionDetector.detect(windowText);
+
+      if (!detection.detected || this.inputRacer === null) {
+        return;
+      }
+
+      // Check for new (unanswered) questions
+      const newQuestions: ReadonlyArray<string> = detection.questions.filter(
+        (q: string): boolean => !answeredQuestions.has(q),
+      );
+
+      if (newQuestions.length === 0) {
+        return;
+      }
+
+      const questionText: string = newQuestions.join("\n");
+
+      // Mark questions as answered to prevent re-prompting
+      for (const q of newQuestions) {
+        answeredQuestions.add(q);
+      }
+
+      this.logger.nodeEvent(
+        "info",
+        this.toLogEvent(node),
+        `Agent question detected (confidence: ${String(detection.confidence)})`,
+      );
+
+      this.applyNodeEvent(fsm, "AGENT_QUESTION");
+
+      // Race CLI and Discord for the answer
+      const input: UserInput = await this.inputRacer.race(questionText);
+
+      // Inject answer into the session
+      await handle.sendMessage(input.content);
+
+      this.applyNodeEvent(fsm, "ANSWER_RECEIVED");
+
+      this.logger.nodeEvent(
+        "info",
+        this.toLogEvent(node),
+        `Answer received from ${input.source}: "${input.content.slice(0, 80)}"`,
+      );
+
+      // If answer came from CLI and Discord is available, notify Discord
+      if (input.source === "cli" && this.notificationRouter !== null) {
+        await this.notificationRouter.sendUpdate(
+          `Answer provided via CLI for ${node.id}: "${input.content.slice(0, 200)}"`,
+        );
+      }
+    });
+
+    // ── Wait for session to complete ────────────────────────────
+    const completion: StreamCompletionEvent = await handle.waitForCompletion();
+
+    rl.close();
+
+    const result: ContainerResult = {
+      stdout: completion.fullOutput,
+      stderr: "",
+      exitCode: completion.exitCode,
+      durationMs: completion.durationMs,
+    };
+
+    // ── Gate evaluation (same as standard path) ─────────────────
+    const evaluation: GateEvaluation = this.gateEvaluator.evaluateToEvent(
+      blueprint.gate,
+      result,
+      state,
+      node.id,
+    );
+
+    this.applyNodeEvent(fsm, evaluation.event);
+
+    if (evaluation.event === "HUMAN_GATE") {
+      return {
+        nodeId: node.id,
+        stateUpdates: {
+          status: fsm.getStateName(),
+          output: result.stdout,
+          exit_code: result.exitCode,
+          gate_result: evaluation.result,
+          started_at: new Date().toISOString(),
+        },
+        pause: `Human gate: ${node.id} — awaiting approval`,
+      };
+    }
+
+    if (evaluation.event === "GATE_FAILED") {
+      this.logger.nodeEvent(
+        "error",
+        this.toLogEvent(node),
+        `Gate FAILED — ${evaluation.result.details}`,
+      );
+
+      return {
+        nodeId: node.id,
+        stateUpdates: {
+          status: fsm.getStateName(),
+          output: result.stdout,
+          exit_code: result.exitCode,
+          gate_result: evaluation.result,
+          completed_at: new Date().toISOString(),
+        },
+        rejection: {
+          gateResult: evaluation.result,
+          routeTo: blueprint.gate.rejection_routes_to,
+        },
+        pause: null,
+      };
+    }
+
+    this.logger.nodeEvent(
+      "info",
+      this.toLogEvent(node),
+      `Gate PASSED — ${evaluation.result.details}`,
+    );
+
+    return {
+      nodeId: node.id,
+      stateUpdates: {
+        status: fsm.getStateName(),
+        output: result.stdout,
+        exit_code: result.exitCode,
+        gate_result: evaluation.result,
+        completed_at: new Date().toISOString(),
+      },
+      pause: null,
+    };
+  }
+
   // ── Review Mode: Phase 1 — Dry Run ────────────────────────────────
   // RUNNING → (dry-run container) → DRY_RUN_DONE → PRESENT_PROPOSAL → pause
 
@@ -407,7 +595,7 @@ export class DagExecutor {
       this.buildContext(node, state, blueprint),
     );
 
-    const result: ContainerResult = await this.dockerManager.spawnContainer({
+    const result: ContainerResult = await this.executionBackend.spawnContainer({
       node,
       blueprint,
       prompt,
@@ -453,7 +641,7 @@ export class DagExecutor {
       this.buildContext(node, state, blueprint),
     );
 
-    const result: ContainerResult = await this.dockerManager.spawnContainer({
+    const result: ContainerResult = await this.executionBackend.spawnContainer({
       node,
       blueprint,
       prompt,
