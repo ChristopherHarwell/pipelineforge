@@ -1,0 +1,30 @@
+name: find-tickets
+description: >
+  Find and list tickets across all projects and features. Use when the user asks
+  to find tickets, list tickets, check ticket status, see what tickets exist for
+  a feature or repo, or wants an overview of work items. Searches the iCloud
+  Notes directory structure where TRDs, HLDs, DLDs, and tickets are stored.
+skill_path: /Users/guest1/.claude/skills/find-tickets/SKILL.md
+execution:
+  prompt_template: |-
+    {{ .skill_content }}
+
+    ## Input
+    {{ .input }}
+  model: sonnet
+  max_turns: 50
+  timeout_minutes: 10
+  allowed_tools: []
+  output_format: json
+parallel:
+  instances: 1
+  naming: "{name}-{i}"
+depends_on: []
+gate:
+  type: quality
+  quality_checks:
+    - check: exit_code
+outputs: {}
+review_mode:
+  enabled: false
+requires_repo: true

@@ -1,0 +1,37 @@
+name: meta
+description: Meta-skill for creating new Claude Code skills following
+  established patterns. Use when building new skills, auditing existing skills
+  for missing directories, or standardizing skill structure across the
+  organization.
+skill_path: /Users/guest1/.claude/skills/meta/SKILL.md
+execution:
+  prompt_template: |-
+    {{ .skill_content }}
+
+    ## Input
+    {{ .input }}
+  model: sonnet
+  max_turns: 50
+  timeout_minutes: 10
+  allowed_tools:
+    - Agent
+    - Bash(ls *)
+    - Bash(mkdir *)
+    - Read
+    - Write
+    - Edit
+    - Glob
+    - Grep
+  output_format: json
+parallel:
+  instances: 1
+  naming: "{name}-{i}"
+depends_on: []
+gate:
+  type: quality
+  quality_checks:
+    - check: exit_code
+outputs: {}
+review_mode:
+  enabled: false
+requires_repo: true

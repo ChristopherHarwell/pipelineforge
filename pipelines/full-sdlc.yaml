@@ -5,6 +5,7 @@ blueprints:
   - assign-tickets
   - implement-ticket
   - qa-review
+  - type-review
   - security-review
   - staff-review
   - vp-review

@@ -1,0 +1,41 @@
+name: tdd
+description: Enforce Test-Driven Development with strict Red-Green-Refactor
+  cycle for asure.identity.api. Auto-triggers when implementing new features,
+  services, controllers, or functionality. Trigger phrases include 'implement',
+  'add feature', 'build', 'create', or any request to add new behavior. Does NOT
+  trigger for bug fixes, documentation, refactoring-only, or configuration
+  changes.
+skill_path: /Users/guest1/.claude/skills/tdd/SKILL.md
+execution:
+  prompt_template: |-
+    {{ .skill_content }}
+
+    ## Input
+    {{ .input }}
+  model: sonnet
+  max_turns: 50
+  timeout_minutes: 10
+  allowed_tools:
+    - Agent
+    - Bash(npx jest *)
+    - Bash(npm test *)
+    - Bash(npm run test:*)
+    - Bash(git *)
+    - Read
+    - Write
+    - Edit
+    - Glob
+    - Grep
+  output_format: json
+parallel:
+  instances: 1
+  naming: "{name}-{i}"
+depends_on: []
+gate:
+  type: quality
+  quality_checks:
+    - check: exit_code
+outputs: {}
+review_mode:
+  enabled: false
+requires_repo: true

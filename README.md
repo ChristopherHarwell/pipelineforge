@@ -79,6 +79,8 @@ lobster run full-sdlc.lobster
        +-- ... (implement --> qa --> type --> security --> staff --> vp --> summary)
 ```
 
+See [docs/running-the-pipeline.md](docs/running-the-pipeline.md) for a quick-start guide to running the pipeline with Docker orchestration, and [docs/adding-a-skill.md](docs/adding-a-skill.md) for adding new skills.
+
 ### Three-Layer Stack
 
 | Layer | Technology | Role |

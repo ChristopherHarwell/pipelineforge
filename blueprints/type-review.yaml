@@ -1,12 +1,12 @@
-name: security-review
-description: "Security review of implementation"
-skill_path: "~/.claude/skills/security-review/SKILL.md"
+name: type-review
+description: "Run type strictness review with 6 parallel Type Strictness Engineer agents. Requires 6/6 approvals to pass."
+skill_path: "~/.claude/skills/type-review/SKILL.md"
 execution:
   prompt_template: |
     {{ .skill_content }}
 
     ## Review Target
-    You are Security reviewer {{ .instance }} of {{ .total }}.
+    You are Type Strictness Engineer {{ .instance }} of {{ .total }}.
 
     ## Repository
     {{ .repo_dir }}
@@ -20,16 +20,20 @@ execution:
     - Read
     - Glob
     - Grep
+    - Bash
+    - Task
+    - Write
   output_format: json
 parallel:
-  instances: 3
+  instances: 6
   naming: "{name}-{i}"
 depends_on:
-  - type-review
+  - qa-review
 gate:
   type: approval
-  required: 3
-  total: 3
+  required: 6
+  total: 6
   approval_marker: "APPROVED"
   rejection_marker: "REJECTED"
   rejection_routes_to: implement-ticket
+requires_repo: true
