@@ -107,7 +107,6 @@ export class ProxySessionManager implements StreamingExecutionBackend {
       `Session ${String(sessionId)} spawned for ${agentName}`,
     );
 
-    // ── Poll for completion ──────────────────────────────────────
     try {
       const completion: SessionCompletionResult = await this.pollUntilComplete(
         sessionId,
@@ -285,30 +284,6 @@ export class ProxySessionManager implements StreamingExecutionBackend {
   };
 
   // ── CLI Subprocess Helpers ──────────────────────────────────────
-
-  /**
-   * Spawn a new agent session via `openclaw agent`.
-   *
-   * @param agentName - The agent name (matches openclaw config agent entry)
-   * @param message - The prompt message to send
-   * @returns The spawned session ID
-   */
-  private async spawnAgentSession(
-    agentName: string,
-    message: string,
-  ): Promise<SessionId> {
-    const { stdout } = await execFileAsync(OPENCLAW_CLI, [
-      "agent",
-      "--agent",
-      agentName,
-      "-m",
-      message,
-      "--json",
-    ]);
-
-    const sessionId: string = this.extractSessionId(stdout);
-    return toSessionId(sessionId);
-  }
 
   /**
    * Poll session status until the session reaches a terminal state
@@ -542,6 +517,18 @@ export class ProxySessionManager implements StreamingExecutionBackend {
         if (typeof obj["session_id"] === "string") {
           return obj["session_id"];
         }
+
+        // runId field (OpenClaw completion response)
+        if (typeof obj["runId"] === "string") {
+          return obj["runId"];
+        }
+
+        // Nested result.meta.agentMeta.sessionId (OpenClaw completion)
+        const nestedSessionId: string | undefined =
+          ProxySessionManager.extractNestedSessionId(obj);
+        if (nestedSessionId !== undefined) {
+          return nestedSessionId;
+        }
       }
     } catch {
       // Not JSON — try other formats
@@ -563,6 +550,35 @@ export class ProxySessionManager implements StreamingExecutionBackend {
     throw new Error(
       `Could not extract session ID from openclaw output: ${trimmed.slice(0, 200)}`,
     );
+  }
+
+  /**
+   * Walk into result.meta.agentMeta.sessionId — the nested path
+   * where OpenClaw completion responses store the session identifier.
+   *
+   * @param obj - The parsed top-level JSON object
+   * @returns The session ID string if found, undefined otherwise
+   */
+  private static extractNestedSessionId(
+    obj: Record<string, unknown>,
+  ): string | undefined {
+    const result: unknown = obj["result"];
+    if (result === null || typeof result !== "object") {
+      return undefined;
+    }
+
+    const meta: unknown = (result as Record<string, unknown>)["meta"];
+    if (meta === null || typeof meta !== "object") {
+      return undefined;
+    }
+
+    const agentMeta: unknown = (meta as Record<string, unknown>)["agentMeta"];
+    if (agentMeta === null || typeof agentMeta !== "object") {
+      return undefined;
+    }
+
+    const sessionId: unknown = (agentMeta as Record<string, unknown>)["sessionId"];
+    return typeof sessionId === "string" ? sessionId : undefined;
   }
 
   private sleep(ms: number): VoidPromise {
