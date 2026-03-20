@@ -20,16 +20,14 @@ export function toMessageId(id: string): DiscordMessageId {
 }
 
 // ── OpenClaw Config Schema ───────────────────────────────────────────
+// The OpenClaw CLI handles gateway auth internally via ~/.openclaw/openclaw.json.
+// We only need the forum channel ID and polling config.
 
 export const OpenClawConfigSchema: z.ZodObject<{
-  readonly gateway_url: z.ZodDefault<z.ZodString>;
-  readonly bearer_token: z.ZodString;
   readonly forum_channel_id: z.ZodString;
   readonly poll_timeout_ms: z.ZodDefault<z.ZodNumber>;
   readonly poll_interval_ms: z.ZodDefault<z.ZodNumber>;
 }> = z.object({
-  gateway_url: z.string().url().default("http://127.0.0.1:18789"),
-  bearer_token: z.string().min(1),
   forum_channel_id: z.string().min(1),
   poll_timeout_ms: z.number().positive().default(300_000),
   poll_interval_ms: z.number().positive().default(3_000),

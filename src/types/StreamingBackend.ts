@@ -1,6 +1,7 @@
 import type { Readable } from "node:stream";
 import type { ExecutionBackend, SpawnOptions } from "@pftypes/ExecutionBackend.ts";
 import type { SessionId } from "@pftypes/ProxySession.ts";
+import type { VoidPromise } from "@pftypes/TypeUtils.ts";
 
 // ── Stream Event Types ──────────────────────────────────────────────
 
@@ -22,13 +23,19 @@ export type StreamEvent = StreamLineEvent | StreamCompletionEvent;
 // ── Streaming Session Handle ────────────────────────────────────────
 // Returned by spawnStreamingSession(). Exposes a live output stream,
 // message injection, and lifecycle control.
+//
+// Implements AsyncDisposable (ES2025) — use with `await using` for
+// automatic cleanup when the handle leaves scope:
+//
+//   await using handle = await backend.spawnStreamingSession(opts);
+//   // ... handle[Symbol.asyncDispose]() called automatically on scope exit
 
-export interface StreamingSessionHandle {
+export interface StreamingSessionHandle extends AsyncDisposable {
   readonly sessionId: SessionId;
   readonly outputStream: Readable;
-  readonly sendMessage: (message: string) => Promise<void>;
+  readonly sendMessage: (message: string) => Promise<string>;
   readonly waitForCompletion: () => Promise<StreamCompletionEvent>;
-  readonly kill: () => Promise<void>;
+  readonly kill: () => VoidPromise;
 }
 
 // ── Streaming Execution Backend ─────────────────────────────────────
@@ -55,11 +62,12 @@ export interface StreamingExecutionBackend extends ExecutionBackend {
    *
    * @param sessionId - The target session
    * @param message - The message to inject
+   * @returns The agent's response text
    */
   readonly sendSessionMessage: (
     sessionId: SessionId,
     message: string,
-  ) => Promise<void>;
+  ) => Promise<string>;
 }
 
 // ── Type Guard ──────────────────────────────────────────────────────
