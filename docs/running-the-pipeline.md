@@ -2,6 +2,41 @@
 
 Quick-start guide for running the full SDLC pipeline with Docker container orchestration and verifying it's working.
 
+## Fastest path: `pipelineforge auto`
+
+The `auto` command walks you through everything interactively — checks prerequisites, builds the Docker image if needed, syncs blueprints, generates configs, and runs the pipeline:
+
+```bash
+pipelineforge auto
+# or via npm
+npm run auto
+```
+
+It will prompt you for:
+- **Feature description** (required) — what you're building
+- **Target repo directory** — where the project code lives (default: current directory)
+- **Notes directory** — where SDLC artifacts (TRDs, tickets, reviews) are written
+- **Pipeline template** — which pipeline to run (default: `full-sdlc`)
+- **Max concurrent containers** — parallelism limit (default: 20)
+- **Review timing** — when reviews run relative to merge (`before`/`after`/`both`)
+- **Discord notifications** — optionally enable Discord thread notifications
+- **Skill definitions directory** — where `SKILL.md` files live (default: `~/.claude/skills`)
+
+After confirming the summary, it automatically:
+1. Verifies Docker is running
+2. Builds `pipelineforge-claude` (worker) and `pipelineforge-gateway` (gateway) images if they don't exist
+3. Verifies Claude credentials (Claude Max OAuth or `ANTHROPIC_API_KEY`)
+4. Syncs blueprints from `SKILL.md` frontmatter
+5. Generates `openclaw.json` and `.lobster` workflow
+6. Starts the OpenClaw gateway container
+7. Executes the full pipeline with streaming HITL support
+
+**Authentication**: Either Claude Max (run `claude login`) or `ANTHROPIC_API_KEY` env var. Claude Max OAuth credentials in `~/.claude/` are mounted into containers automatically.
+
+---
+
+If you need more control over individual steps, read on for the manual workflow.
+
 ## Prerequisites
 
 | Requirement | How to verify |
@@ -19,18 +54,25 @@ export OPENCLAW_URL="http://127.0.0.1:18789"   # gateway URL
 export OPENCLAW_TOKEN="<your-token>"             # bearer token
 ```
 
-## 1. Build the Docker image (one-time)
+## 1. Build Docker images (one-time)
 
 ```bash
-pipelineforge build-image
+# Build both worker and gateway images
+pipelineforge build-image --gateway
+
+# Or build individually
+pipelineforge build-image                # worker only
+pipelineforge build-image --gateway-only # gateway only
 ```
 
-This builds `pipelineforge-claude` from `docker/Dockerfile` -- a Node 22 slim image with Claude Code CLI, git, ripgrep, and jq. Multi-arch (AMD64/ARM64).
+This builds two images:
+- **`pipelineforge-claude`** (worker) from `docker/Dockerfile` -- Node 22 slim + Claude Code CLI, git, ripgrep, jq
+- **`pipelineforge-gateway`** from `docker/Dockerfile.gateway` -- Node 22 slim + OpenClaw CLI + Docker CLI
 
 Verify:
 
 ```bash
-docker images pipelineforge-claude
+docker images pipelineforge-claude pipelineforge-gateway
 ```
 
 ## 2. Sync blueprints and generate configs

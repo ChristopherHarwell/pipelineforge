@@ -112,7 +112,7 @@ export class ProxyContainerManager {
   private buildDockerRunArgs(): string[] {
     const name: string = this.config.containerName;
 
-    return [
+    const args: string[] = [
       "--detach",
       "--name", name,
       "--publish", `${String(this.config.gatewayPort)}:18789`,
@@ -124,15 +124,37 @@ export class ProxyContainerManager {
       "--volume", `${this.config.repoDir}:/workspace:rw`,
       "--volume", `${this.config.notesDir}:/notes:rw`,
       "--volume", `${this.config.stateDir}:/state:ro`,
+      // Mount Claude Code credentials from host (supports Claude Max OAuth + API key auth)
       "--volume", `${this.config.claudeDir}:/home/claude/.claude:ro`,
+      "--volume", `${this.config.claudeJsonPath}:/home/claude/.claude.json:ro`,
       // Pass host-absolute paths as env vars for worker container bind mounts
       "--env", `HOST_REPO_DIR=${this.config.repoDir}`,
       "--env", `HOST_NOTES_DIR=${this.config.notesDir}`,
       "--env", `HOST_STATE_DIR=${this.config.stateDir}`,
       "--env", `HOST_CLAUDE_DIR=${this.config.claudeDir}`,
-      "--env", `ANTHROPIC_API_KEY=${this.config.anthropicApiKey}`,
-      this.config.openclawImage,
     ];
+
+    // Forward Claude Code authentication env vars from host.
+    // Claude Max uses OAuth credentials stored in ~/.claude/ (mounted above).
+    // API key auth uses ANTHROPIC_API_KEY. Both paths are supported.
+    const CLAUDE_AUTH_VARS: ReadonlyArray<string> = [
+      "ANTHROPIC_API_KEY",
+      "CLAUDE_CODE_USE_BEDROCK",
+      "CLAUDE_CODE_USE_VERTEX",
+      "ANTHROPIC_AUTH_TOKEN",
+      "CLAUDE_API_KEY",
+    ];
+
+    for (const varName of CLAUDE_AUTH_VARS) {
+      const value: string | undefined = process.env[varName];
+      if (value !== undefined) {
+        args.push("--env", `${varName}=${value}`);
+      }
+    }
+
+    args.push(this.config.openclawImage);
+
+    return args;
   }
 
   // ── Health Check ──────────────────────────────────────────────────

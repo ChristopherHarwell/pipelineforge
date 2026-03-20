@@ -2,11 +2,13 @@
 
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { createInterface } from "node:readline/promises";
 import type { DagGraph, DagNode } from "@pftypes/Graph.ts";
 import type {
   NodeState,
@@ -46,6 +48,8 @@ import { DiscordInputChannel } from "@core/DiscordInputChannel.ts";
 import { InputRacer } from "@core/InputRacer.ts";
 import type { ChildProcess } from "node:child_process";
 import { discoverSkills } from "@core/SkillFrontmatterParser.ts";
+import type { DiscoveredSkill } from "@pftypes/SkillFrontmatter.ts";
+import type { OpenClawGatewayConfig } from "@pftypes/ProxySession.ts";
 import { BlueprintSyncer } from "@core/BlueprintSyncer.ts";
 import { OpenClawConfigSyncer } from "@core/OpenClawConfigSyncer.ts";
 import { generateLobsterWorkflow } from "@core/LobsterWorkflowGenerator.ts";
@@ -79,6 +83,8 @@ const DEFAULT_CLAUDE_JSON_PATH: string = resolve(
   ".claude.json",
 );
 const DEFAULT_IMAGE_NAME: string = "pipelineforge-claude";
+const DEFAULT_GATEWAY_IMAGE_NAME: string = "pipelineforge-gateway";
+const DOCKER_DIR: string = resolve(PIPELINEFORGE_ROOT, "docker");
 
 // ── PipelineForge CLI ───────────────────────────────────────────────
 
@@ -115,7 +121,7 @@ program
   .option("--state-dir <path>", "State directory", DEFAULT_STATE_DIR)
   .option("--image <name>", "Docker image name", DEFAULT_IMAGE_NAME)
   .option("--proxy", "Use OpenClaw proxy container as execution backend", false)
-  .option("--proxy-image <name>", "OpenClaw proxy container image", "openclaw/gateway:latest")
+  .option("--proxy-image <name>", "OpenClaw proxy container image", DEFAULT_GATEWAY_IMAGE_NAME)
   .option("--proxy-port <port>", "Proxy gateway port", "18789")
   .option("--docker-socket <path>", "Docker socket path", "/var/run/docker.sock")
   .option("--discord", "Enable Discord notifications via OpenClaw", false)
@@ -234,13 +240,9 @@ program
 
     if (opts.proxy) {
       // ── Path C: OpenClaw Proxy Container ────────────────────
-      const apiKey: string | undefined = process.env["ANTHROPIC_API_KEY"];
-      if (apiKey === undefined || apiKey.length === 0) {
-        console.error(
-          "Proxy mode requires ANTHROPIC_API_KEY environment variable.",
-        );
-        process.exit(1);
-      }
+      // Claude Max OAuth credentials in ~/.claude/ are mounted into the container.
+      // ANTHROPIC_API_KEY is forwarded if set but not required.
+      verifyClaudeCredentials();
 
       const proxyPort: number = parseInt(opts.proxyPort, 10);
       const configPath: string = resolve(opts.stateDir, pipelineId, "openclaw.json");
@@ -254,7 +256,7 @@ program
         hostClaudeDir: DEFAULT_CLAUDE_DIR,
       });
 
-      const gatewayConfig = configGenerator.generate(
+      const gatewayConfig: OpenClawGatewayConfig = configGenerator.generate(
         graph,
         registry,
         maxConcurrent,
@@ -277,12 +279,12 @@ program
         containerName: `pf-proxy-${pipelineId}`,
         openclawImage: opts.proxyImage,
         gatewayPort: proxyPort,
-        anthropicApiKey: apiKey,
         configPath,
         repoDir,
         notesDir,
         stateDir: opts.stateDir,
         claudeDir: DEFAULT_CLAUDE_DIR,
+        claudeJsonPath: DEFAULT_CLAUDE_JSON_PATH,
         dockerSocketPath: opts.dockerSocket,
       };
 
@@ -349,7 +351,7 @@ program
       notificationRouter = new NotificationRouter(channel, logger, null);
 
       // Create Discord thread and store ID in state
-      const threadId = await notificationRouter.ensureThread(
+      const threadId: DiscordThreadId = await notificationRouter.ensureThread(
         pipelineId,
         opts.feature,
       );
@@ -425,7 +427,7 @@ program
   .option("--pipelines-dir <path>", "Pipelines directory", DEFAULT_PIPELINES_DIR)
   .option("--image <name>", "Docker image name", DEFAULT_IMAGE_NAME)
   .option("--proxy", "Use OpenClaw proxy container as execution backend", false)
-  .option("--proxy-image <name>", "OpenClaw proxy container image", "openclaw/gateway:latest")
+  .option("--proxy-image <name>", "OpenClaw proxy container image", DEFAULT_GATEWAY_IMAGE_NAME)
   .option("--proxy-port <port>", "Proxy gateway port", "18789")
   .option("--docker-socket <path>", "Docker socket path", "/var/run/docker.sock")
   .option("--discord", "Enable Discord notifications via OpenClaw", false)
@@ -557,7 +559,7 @@ program
   .option("--pipelines-dir <path>", "Pipelines directory", DEFAULT_PIPELINES_DIR)
   .option("--image <name>", "Docker image name", DEFAULT_IMAGE_NAME)
   .option("--proxy", "Use OpenClaw proxy container as execution backend", false)
-  .option("--proxy-image <name>", "OpenClaw proxy container image", "openclaw/gateway:latest")
+  .option("--proxy-image <name>", "OpenClaw proxy container image", DEFAULT_GATEWAY_IMAGE_NAME)
   .option("--proxy-port <port>", "Proxy gateway port", "18789")
   .option("--docker-socket <path>", "Docker socket path", "/var/run/docker.sock")
   .option("--discord", "Enable Discord notifications via OpenClaw", false)
@@ -739,39 +741,41 @@ program
 
 program
   .command("build-image")
-  .description("Build the Claude Code Docker image")
-  .option("--tag <name>", "Image tag", DEFAULT_IMAGE_NAME)
-  .action(async (opts: { readonly tag: string }): Promise<void> => {
-    const dockerfilePath: string = resolve(PIPELINEFORGE_ROOT, "docker");
-
+  .description("Build Docker images (worker and/or gateway)")
+  .option("--tag <name>", "Worker image tag", DEFAULT_IMAGE_NAME)
+  .option("--gateway", "Also build the OpenClaw gateway image", false)
+  .option("--gateway-tag <name>", "Gateway image tag", DEFAULT_GATEWAY_IMAGE_NAME)
+  .option("--gateway-only", "Only build the gateway image (skip worker)", false)
+  .action(async (opts: {
+    readonly tag: string;
+    readonly gateway: boolean;
+    readonly gatewayTag: string;
+    readonly gatewayOnly: boolean;
+  }): Promise<void> => {
     console.log("╔══════════════════════════════════════════════════════╗");
     console.log("║              PipelineForge — build-image            ║");
     console.log("╚══════════════════════════════════════════════════════╝");
-    console.log(`  Dockerfile: ${dockerfilePath}/Dockerfile`);
-    console.log(`  Tag:        ${opts.tag}`);
-    console.log("");
 
-    try {
-      const { stdout, stderr } = await execFileAsync("docker", [
-        "build",
-        "-t",
-        opts.tag,
-        dockerfilePath,
-      ]);
+    const buildLogger: PipelineLogger = new ConsoleLogger();
 
-      if (stdout.length > 0) {
-        console.log(stdout);
-      }
-      if (stderr.length > 0) {
-        console.error(stderr);
-      }
+    if (!opts.gatewayOnly) {
+      const workerDockerfile: string = resolve(DOCKER_DIR, "Dockerfile");
+      console.log(`  Worker:     ${opts.tag}`);
+      console.log(`  Dockerfile: ${workerDockerfile}`);
+      const { stdout: wOut, stderr: wErr } = await DockerManager.buildImage(opts.tag, workerDockerfile);
+      if (wOut.length > 0) { buildLogger.pipelineEvent("info", wOut); }
+      if (wErr.length > 0) { buildLogger.pipelineEvent("warn", wErr); }
+      console.log(`  ✓ Worker image built: ${opts.tag}`);
+    }
 
-      console.log(`Image built successfully: ${opts.tag}`);
-    } catch (err: unknown) {
-      const message: string =
-        err instanceof Error ? err.message : "Unknown error";
-      console.error(`Failed to build image: ${message}`);
-      process.exit(1);
+    if (opts.gateway || opts.gatewayOnly) {
+      const gatewayDockerfile: string = resolve(DOCKER_DIR, "Dockerfile.gateway");
+      console.log(`  Gateway:    ${opts.gatewayTag}`);
+      console.log(`  Dockerfile: ${gatewayDockerfile}`);
+      const { stdout: gOut, stderr: gErr } = await DockerManager.buildImage(opts.gatewayTag, gatewayDockerfile);
+      if (gOut.length > 0) { buildLogger.pipelineEvent("info", gOut); }
+      if (gErr.length > 0) { buildLogger.pipelineEvent("warn", gErr); }
+      console.log(`  ✓ Gateway image built: ${opts.gatewayTag}`);
     }
   });
 
@@ -971,7 +975,7 @@ program
 
     // ── Discover skills ──────────────────────────────────────────
     console.log("Discovering skills...");
-    const skills = await discoverSkills(opts.skillDir);
+    const skills: ReadonlyArray<DiscoveredSkill> = await discoverSkills(opts.skillDir);
     console.log(`  Found ${String(skills.length)} skills`);
 
     // ── Sync blueprints ──────────────────────────────────────────
@@ -1034,7 +1038,7 @@ program
         maxConcurrent,
       });
 
-      const gatewayConfig = configSyncer.generate(
+      const gatewayConfig: OpenClawGatewayConfig = configSyncer.generate(
         registry.all(),
         pipelineConfig.blueprints,
         opts.discordChannel,
@@ -1083,9 +1087,431 @@ program
     console.log(`Timestamp: ${report.timestamp}`);
   });
 
+// ── auto command ────────────────────────────────────────────────────
+
+program
+  .command("auto")
+  .description("Interactive guided setup: prompts for inputs, checks prerequisites, syncs, builds, and runs the full pipeline")
+  .option("--state-dir <path>", "State directory", DEFAULT_STATE_DIR)
+  .option("--blueprints-dir <path>", "Blueprints directory", DEFAULT_BLUEPRINTS_DIR)
+  .option("--pipelines-dir <path>", "Pipelines directory", DEFAULT_PIPELINES_DIR)
+  .action(async (opts: {
+    readonly stateDir: string;
+    readonly blueprintsDir: string;
+    readonly pipelinesDir: string;
+  }): Promise<void> => {
+    console.log("╔══════════════════════════════════════════════════════╗");
+    console.log("║              PipelineForge — auto                   ║");
+    console.log("╚══════════════════════════════════════════════════════╝");
+    console.log("");
+
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+
+    try {
+      // ── Step 1: Gather user input ──────────────────────────────
+      console.log("─── Configuration ─────────────────────────────────────");
+      console.log("");
+
+      const feature: string = await promptRequired(rl, "Feature description: ");
+
+      const defaultRepoDir: string = process.cwd();
+      const repoDir: string = resolve(
+        await promptWithDefault(rl, "Target repo directory", defaultRepoDir),
+      );
+
+      const defaultNotesDir: string =
+        process.env["PIPELINEFORGE_NOTES_DIR"] ?? resolve(opts.stateDir, "notes");
+      const notesDir: string = resolve(
+        await promptWithDefault(rl, "Notes directory", defaultNotesDir),
+      );
+
+      const pipeline: string = await promptWithDefault(rl, "Pipeline template", "full-sdlc");
+
+      const maxConcurrentStr: string = await promptWithDefault(rl, "Max concurrent containers", "20");
+      const maxConcurrent: number = parseInt(maxConcurrentStr, 10);
+
+      const reviewTiming: ReviewTiming = validateReviewTiming(
+        await promptWithDefault(rl, "Review timing (before/after/both)", "before"),
+      );
+
+      const enableDiscord: boolean = await promptYesNo(rl, "Enable Discord notifications?", false);
+      let discordChannel: string | undefined;
+      let openclawToken: string | undefined;
+
+      if (enableDiscord) {
+        discordChannel = await promptRequired(rl, "Discord forum channel ID: ");
+        openclawToken = process.env["OPENCLAW_TOKEN"];
+        if (openclawToken === undefined || openclawToken.length === 0) {
+          openclawToken = await promptRequired(rl, "OpenClaw bearer token: ");
+        }
+      }
+
+      const skillDir: string = await promptWithDefault(
+        rl,
+        "Skill definitions directory",
+        DEFAULT_SKILL_DIR,
+      );
+
+      console.log("");
+      console.log("─── Summary ───────────────────────────────────────────");
+      console.log(`  Feature:        ${feature}`);
+      console.log(`  Repo:           ${repoDir}`);
+      console.log(`  Notes:          ${notesDir}`);
+      console.log(`  Pipeline:       ${pipeline}`);
+      console.log(`  Max concurrent: ${String(maxConcurrent)}`);
+      console.log(`  Review timing:  ${reviewTiming}`);
+      console.log(`  Discord:        ${enableDiscord ? `yes (channel: ${discordChannel ?? "?"})` : "no"}`);
+      console.log(`  Skill dir:      ${skillDir}`);
+      console.log("");
+
+      const proceed: boolean = await promptYesNo(rl, "Proceed?", true);
+      if (!proceed) {
+        console.log("Aborted.");
+        return;
+      }
+
+      // Close readline before long-running steps (allows proxy HITL to use stdin)
+      rl.close();
+
+      console.log("");
+
+      // ── Step 2: Check Docker is running ────────────────────────
+      console.log("─── Checking prerequisites ────────────────────────────");
+      console.log("");
+      console.log("  Checking Docker daemon...");
+
+      const dockerRunning: boolean = await DockerManager.isDaemonRunning();
+      if (!dockerRunning) {
+        console.error("  ✗ Docker is not running. Start Docker and try again.");
+        process.exit(1);
+      }
+      console.log("  ✓ Docker is running");
+
+      // ── Step 3: Check/build Docker images ──────────────────────
+      const autoLogger: PipelineLogger = new ConsoleLogger();
+      await DockerManager.ensureImage(DEFAULT_IMAGE_NAME, resolve(DOCKER_DIR, "Dockerfile"), "worker", autoLogger);
+      await DockerManager.ensureImage(DEFAULT_GATEWAY_IMAGE_NAME, resolve(DOCKER_DIR, "Dockerfile.gateway"), "gateway", autoLogger);
+
+      // ── Check Claude credentials ───────────────────────────────
+      console.log("  Checking Claude credentials...");
+      verifyClaudeCredentials();
+
+      // ── Step 4: Sync blueprints + generate configs ─────────────
+      console.log("");
+      console.log("─── Syncing blueprints ────────────────────────────────");
+      console.log("");
+
+      console.log("  Discovering skills...");
+      const skills: ReadonlyArray<DiscoveredSkill> = await discoverSkills(skillDir);
+      console.log(`  Found ${String(skills.length)} skills`);
+
+      console.log("  Syncing blueprints...");
+      const syncer: BlueprintSyncer = new BlueprintSyncer();
+      const report: SyncReport = await syncer.sync(skills, opts.blueprintsDir);
+
+      for (const entry of report.entries) {
+        const icon: string = syncOutcomeIcon(entry.outcome);
+        console.log(`    ${icon} ${entry.name as string} — ${entry.outcome}: ${entry.detail}`);
+      }
+
+      // Generate OpenClaw config
+      console.log("");
+      console.log("  Generating OpenClaw config...");
+
+      const pipelineConfig: PipelineConfig = await loadPipelineConfig(
+        opts.pipelinesDir,
+        pipeline,
+      );
+
+      const registry: BlueprintRegistry = new BlueprintRegistry();
+      await registry.loadFromDirectory(opts.blueprintsDir);
+
+      const configSyncer: OpenClawConfigSyncer = new OpenClawConfigSyncer({
+        workerImage: DEFAULT_IMAGE_NAME,
+        hostRepoDir: repoDir,
+        hostNotesDir: notesDir,
+        hostStateDir: opts.stateDir,
+        hostClaudeDir: DEFAULT_CLAUDE_DIR,
+        maxConcurrent,
+      });
+
+      const gatewayConfig: OpenClawGatewayConfig = configSyncer.generate(
+        registry.all(),
+        pipelineConfig.blueprints,
+        discordChannel,
+      );
+
+      const pipelineId: string = randomUUID().slice(0, 8);
+      const configDir: string = resolve(opts.stateDir, pipelineId);
+      await mkdir(configDir, { recursive: true });
+      const configPath: string = resolve(configDir, "openclaw.json");
+      await configSyncer.writeConfig(gatewayConfig, configPath);
+      console.log(`  ✓ Config written to ${configPath}`);
+      console.log(`  ✓ Agents: ${String(gatewayConfig.agents.list.length)}`);
+
+      // Generate Lobster workflow
+      console.log("  Generating Lobster workflow...");
+      const lobsterYaml: string = generateLobsterWorkflow(pipelineConfig, registry.all());
+      const lobsterPath: string = resolve(DEFAULT_PIPELINES_DIR, `${pipeline}.lobster`);
+      await writeFile(lobsterPath, lobsterYaml, "utf-8");
+      console.log(`  ✓ Workflow written to ${lobsterPath}`);
+
+      // ── Step 5: Run the pipeline ───────────────────────────────
+      console.log("");
+      console.log("─── Running pipeline ──────────────────────────────────");
+      console.log("");
+
+      await mkdir(repoDir, { recursive: true });
+      await mkdir(notesDir, { recursive: true });
+
+      console.log(`  Pipeline ID:    ${pipelineId}`);
+      console.log(`  Feature:        ${feature}`);
+      console.log(`  Repo:           ${repoDir}`);
+      console.log(`  Notes:          ${notesDir}`);
+      console.log(`  Backend:        proxy (OpenClaw gateway)`);
+      console.log("");
+
+      // ── Build DAG ──────────────────────────────────────────────
+      const dagBuilder: DagBuilder = new DagBuilder();
+      const graph: DagGraph = dagBuilder.build(
+        registry.all(),
+        pipelineConfig.blueprints,
+      );
+      console.log(
+        `  Nodes: ${String(graph.nodes.size)} | ` +
+        `Groups: ${String(graph.parallel_groups.length)}`,
+      );
+      for (let i = 0; i < graph.parallel_groups.length; i++) {
+        const group: ReadonlyArray<string> = graph.parallel_groups[i]!;
+        console.log(`  Group ${String(i)}: [${group.join(", ")}]`);
+      }
+
+      // ── Create initial state ───────────────────────────────────
+      let initialState: PipelineState = createInitialState(
+        pipelineId,
+        pipeline,
+        feature,
+        notesDir,
+        repoDir,
+        reviewTiming,
+        graph,
+      );
+
+      const stateManager: StateManager = new StateManager(opts.stateDir);
+      await stateManager.save(initialState);
+
+      const logger: PipelineLogger = new ConsoleLogger();
+      const gateEvaluator: GateEvaluator = new GateEvaluator();
+      const worktreeManager: WorktreeManager = new WorktreeManager({
+        repoDir,
+        pipelineId,
+      });
+      const templateEngine: TemplateEngine = new TemplateEngine();
+      const promptBuilder: PromptBuilder = new PromptBuilder(templateEngine);
+
+      // ── Start proxy gateway ────────────────────────────────────
+      // Claude Max OAuth credentials in ~/.claude/ are mounted into the container.
+      // ANTHROPIC_API_KEY is forwarded if set but not required.
+      verifyClaudeCredentials();
+
+      const proxyPort: number = 18789;
+      const proxyConfig: ProxyContainerConfig = {
+        pipelineId,
+        containerName: `pf-proxy-${pipelineId}`,
+        openclawImage: DEFAULT_GATEWAY_IMAGE_NAME,
+        gatewayPort: proxyPort,
+        configPath,
+        repoDir,
+        notesDir,
+        stateDir: opts.stateDir,
+        claudeDir: DEFAULT_CLAUDE_DIR,
+        claudeJsonPath: DEFAULT_CLAUDE_JSON_PATH,
+        dockerSocketPath: "/var/run/docker.sock",
+      };
+
+      const proxyManager: ProxyContainerManager = new ProxyContainerManager(
+        proxyConfig,
+        logger,
+      );
+      await proxyManager.start();
+
+      const executionBackend: ExecutionBackend = new ProxySessionManager(
+        proxyManager.getGatewayUrl(),
+        logger,
+      );
+
+      // ── Notification channel ───────────────────────────────────
+      let notificationRouter: NotificationRouter | null = null;
+
+      if (enableDiscord && discordChannel !== undefined) {
+        const bearerToken: string = openclawToken ?? "";
+        const openclawConfig: OpenClawConfig = OpenClawConfigSchema.parse({
+          gateway_url: proxyManager.getGatewayUrl(),
+          bearer_token: bearerToken,
+          forum_channel_id: discordChannel,
+        });
+
+        const channel: NotificationChannel = new OpenClawClient(
+          openclawConfig,
+          logger,
+        );
+
+        notificationRouter = new NotificationRouter(channel, logger, null);
+
+        const threadId: DiscordThreadId = await notificationRouter.ensureThread(
+          pipelineId,
+          feature,
+        );
+        initialState = {
+          ...initialState,
+          discord_thread_id: String(threadId),
+        };
+        await stateManager.save(initialState);
+        console.log(`  Discord:        enabled (thread: ${String(threadId)})`);
+      }
+
+      // ── Input racer ────────────────────────────────────────────
+      const inputChannels: InputChannel[] = [new CliInputChannel()];
+      if (notificationRouter !== null) {
+        inputChannels.push(
+          new DiscordInputChannel(notificationRouter, pipelineId, "pipeline"),
+        );
+      }
+      const inputRacer: InputRacer = new InputRacer(inputChannels);
+
+      // ── Execute ────────────────────────────────────────────────
+      const executor: DagExecutor = new DagExecutor(
+        executionBackend,
+        gateEvaluator,
+        stateManager,
+        worktreeManager,
+        promptBuilder,
+        logger,
+        { maxConcurrent, reviewTiming },
+        notificationRouter,
+        inputRacer,
+      );
+
+      console.log("");
+      console.log("Executing pipeline...");
+      console.log("─".repeat(56));
+
+      try {
+        const result: ExecutionResult = await executor.execute(
+          graph,
+          registry,
+          initialState,
+        );
+
+        console.log("");
+        printPipelineResult(result);
+      } finally {
+        inputRacer.close();
+        await proxyManager.stop();
+      }
+    } finally {
+      rl.close();
+    }
+  });
+
 program.parse();
 
 // ── Helpers ─────────────────────────────────────────────────────────
+
+// ── Readline Prompt Helpers ─────────────────────────────────────────
+
+/**
+ * Strip surrounding single or double quotes from user input.
+ * Users often paste shell-quoted paths like `"/path/to/dir"` or `'/path/to/dir'`.
+ */
+function stripQuotes(input: string): string {
+  if (
+    (input.startsWith('"') && input.endsWith('"')) ||
+    (input.startsWith("'") && input.endsWith("'"))
+  ) {
+    return input.slice(1, -1);
+  }
+  return input;
+}
+
+async function promptRequired(
+  rl: import("node:readline/promises").Interface,
+  question: string,
+): Promise<string> {
+  let answer: string = "";
+  while (answer.length === 0) {
+    answer = stripQuotes((await rl.question(question)).trim());
+    if (answer.length === 0) {
+      console.log("  (required — please enter a value)");
+    }
+  }
+  return answer;
+}
+
+async function promptWithDefault(
+  rl: import("node:readline/promises").Interface,
+  label: string,
+  defaultValue: string,
+): Promise<string> {
+  const answer: string = stripQuotes((await rl.question(`${label} [${defaultValue}]: `)).trim());
+  return answer.length > 0 ? answer : defaultValue;
+}
+
+async function promptYesNo(
+  rl: import("node:readline/promises").Interface,
+  question: string,
+  defaultYes: boolean,
+): Promise<boolean> {
+  const hint: string = defaultYes ? "Y/n" : "y/N";
+  const answer: string = (await rl.question(`${question} (${hint}): `)).trim().toLowerCase();
+  if (answer.length === 0) {
+    return defaultYes;
+  }
+  return answer === "y" || answer === "yes";
+}
+
+
+
+// ── Claude Credential Verification ──────────────────────────────────
+
+/**
+ * Verify that Claude Code credentials are available on the host.
+ * Supports two authentication paths:
+ *   1. Claude Max (OAuth) — credentials stored in ~/.claude/ after `claude login`
+ *   2. API key — ANTHROPIC_API_KEY environment variable
+ *
+ * Both are mounted/forwarded into Docker containers. At least one must be present.
+ *
+ * @throws Exits the process if no credentials are found
+ */
+function verifyClaudeCredentials(): void {
+  const hasApiKey: boolean =
+    process.env["ANTHROPIC_API_KEY"] !== undefined &&
+    process.env["ANTHROPIC_API_KEY"]!.length > 0;
+
+  // Claude Max stores OAuth session tokens in ~/.claude.json.
+  // The ~/.claude/ directory contains settings, history, and session data.
+  const hasClaudeAuth: boolean =
+    existsSync(DEFAULT_CLAUDE_JSON_PATH) ||
+    existsSync(resolve(DEFAULT_CLAUDE_DIR, "statsig"));
+
+  if (!hasApiKey && !hasClaudeAuth) {
+    console.error(
+      "No Claude credentials found.\n" +
+      "  Option 1 (Claude Max): Run `claude login` to authenticate via OAuth\n" +
+      "  Option 2 (API key):    Set ANTHROPIC_API_KEY environment variable\n" +
+      "\n" +
+      `  Checked: ${DEFAULT_CLAUDE_DIR}/ and $ANTHROPIC_API_KEY`,
+    );
+    process.exit(1);
+  }
+
+  if (hasApiKey) {
+    console.log("  Auth: ANTHROPIC_API_KEY detected");
+  } else {
+    console.log("  Auth: Claude Max credentials detected (OAuth)");
+  }
+}
 
 function syncOutcomeIcon(outcome: string): string {
   switch (outcome) {

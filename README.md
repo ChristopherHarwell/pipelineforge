@@ -240,6 +240,7 @@ docker build -t pipelineforge-claude docker/
 
 | Command | Description |
 |---------|-------------|
+| `pipelineforge auto` | Interactive guided setup: prompts, checks, syncs, builds, and runs everything |
 | `pipelineforge run` | Start a new pipeline |
 | `pipelineforge resume --id <id>` | Resume a paused pipeline |
 | `pipelineforge retry --id <id>` | Retry failed nodes |

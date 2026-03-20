@@ -1,0 +1,33 @@
+# OpenClaw Gateway — runs the WebSocket gateway that spawns worker containers.
+# Build: docker build -f Dockerfile.gateway -t pipelineforge-gateway .
+FROM node:22-slim
+
+# ── Install system dependencies ─────────────────────────────────────
+# Docker CLI is required for spawning sibling worker containers via the
+# mounted Docker socket. curl and jq are used by health checks.
+RUN apt-get update && \
+    apt-get install -y curl jq git && \
+    curl -fsSL https://get.docker.com | sh && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# ── Install OpenClaw CLI globally ───────────────────────────────────
+RUN npm install -g openclaw
+
+# ── Create non-root user ────────────────────────────────────────────
+# Add to docker group so it can access the mounted Docker socket.
+RUN useradd -m -s /bin/bash -G docker openclaw
+
+# ── Seed config directory ───────────────────────────────────────────
+RUN mkdir -p /home/openclaw/.openclaw /app && \
+    chown -R openclaw:openclaw /home/openclaw/.openclaw /app
+
+USER openclaw
+WORKDIR /app
+
+EXPOSE 18789
+
+# ── Default entrypoint ──────────────────────────────────────────────
+# PipelineForge mounts openclaw.json at /app/openclaw.json and the
+# Docker socket at /var/run/docker.sock. The gateway listens on 18789
+# and spawns worker containers as siblings via the Docker socket.
+ENTRYPOINT ["openclaw", "gateway", "--port", "18789", "--bind", "lan", "--auth", "none"]

@@ -1,4 +1,6 @@
 import type Docker from "dockerode";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { Readable } from "node:stream";
 import { PassThrough } from "node:stream";
 import type { Blueprint } from "@pftypes/Blueprint.ts";
@@ -6,6 +8,8 @@ import type { DagNode } from "@pftypes/Graph.ts";
 import type { ContainerResult } from "@pftypes/Pipeline.ts";
 import type { PipelineLogger } from "@pftypes/Logger.ts";
 import type { ExecutionBackend, SpawnOptions } from "@pftypes/ExecutionBackend.ts";
+
+const execFileAsync: typeof execFile.__promisify__ = promisify(execFile);
 
 // ── Docker Config ───────────────────────────────────────────────────
 
@@ -358,5 +362,101 @@ export class DockerManager implements ExecutionBackend {
    */
   private parseCpus(cpus: string): number {
     return parseFloat(cpus) * 1e9;
+  }
+
+  // ── Static Image Management ──────────────────────────────────────
+
+  /**
+   * Check whether a Docker image exists locally.
+   *
+   * @param tag - Image tag to check (e.g., "pipelineforge-claude")
+   * @returns true if the image exists locally
+   */
+  static async imageExists(tag: string): Promise<boolean> {
+    try {
+      await execFileAsync("docker", ["image", "inspect", tag]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Build a Docker image from a Dockerfile.
+   *
+   * @param tag - Image tag to assign (e.g., "pipelineforge-claude")
+   * @param dockerfile - Absolute path to the Dockerfile
+   * @param context - Build context directory (defaults to dirname of Dockerfile)
+   * @returns Build output (stdout + stderr combined)
+   * @throws Error if the build fails
+   */
+  static async buildImage(
+    tag: string,
+    dockerfile: string,
+    context?: string,
+  ): Promise<{ readonly stdout: string; readonly stderr: string }> {
+    const { dirname } = await import("node:path");
+    const buildContext: string = context ?? dirname(dockerfile);
+
+    const { stdout, stderr } = await execFileAsync("docker", [
+      "build",
+      "-f",
+      dockerfile,
+      "-t",
+      tag,
+      buildContext,
+    ]);
+
+    return { stdout, stderr };
+  }
+
+  /**
+   * Check if a Docker image exists locally; if not, build it.
+   *
+   * @param tag - Image tag (e.g., "pipelineforge-claude")
+   * @param dockerfile - Absolute path to the Dockerfile
+   * @param label - Human-readable label for log output (e.g., "worker", "gateway")
+   * @param logger - Optional logger for status messages
+   * @throws Error if the build fails
+   */
+  static async ensureImage(
+    tag: string,
+    dockerfile: string,
+    label: string,
+    logger?: PipelineLogger,
+  ): Promise<void> {
+    const exists: boolean = await DockerManager.imageExists(tag);
+
+    if (exists) {
+      logger?.pipelineEvent("info", `Image ${tag} (${label}) found`);
+      return;
+    }
+
+    logger?.pipelineEvent("info", `Image ${tag} (${label}) not found — building...`);
+
+    const { stdout, stderr } = await DockerManager.buildImage(tag, dockerfile);
+
+    if (stdout.length > 0 && logger !== undefined) {
+      logger.pipelineEvent("info", stdout);
+    }
+    if (stderr.length > 0 && logger !== undefined) {
+      logger.pipelineEvent("warn", stderr);
+    }
+
+    logger?.pipelineEvent("info", `Image ${tag} (${label}) built`);
+  }
+
+  /**
+   * Check whether the Docker daemon is reachable.
+   *
+   * @returns true if `docker info` succeeds
+   */
+  static async isDaemonRunning(): Promise<boolean> {
+    try {
+      await execFileAsync("docker", ["info"]);
+      return true;
+    } catch {
+      return false;
+    }
   }
 }

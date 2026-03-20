@@ -29,12 +29,12 @@ export interface ProxyContainerConfig {
   readonly containerName: string;
   readonly openclawImage: string;
   readonly gatewayPort: number;
-  readonly anthropicApiKey: string;
   readonly configPath: string;
   readonly repoDir: string;
   readonly notesDir: string;
   readonly stateDir: string;
   readonly claudeDir: string;
+  readonly claudeJsonPath: string;
   readonly dockerSocketPath: string;
 }
 
