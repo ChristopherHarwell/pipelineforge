@@ -79,7 +79,7 @@ lobster run full-sdlc.lobster
        +-- ... (implement --> qa --> type --> security --> staff --> vp --> summary)
 ```
 
-See [docs/running-the-pipeline.md](docs/running-the-pipeline.md) for a quick-start guide to running the pipeline with Docker orchestration, and [docs/adding-a-skill.md](docs/adding-a-skill.md) for adding new skills.
+See [docs/running-the-pipeline.md](docs/running-the-pipeline.md) for a quick-start guide to running the pipeline with Docker orchestration, [docs/adding-a-skill.md](docs/adding-a-skill.md) for adding new skills, and [docs/discord-setup.md](docs/discord-setup.md) for Discord integration.
 
 ### Three-Layer Stack
 
