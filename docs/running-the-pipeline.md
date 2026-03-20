@@ -104,9 +104,11 @@ pipelineforge run \
   --notes-dir /path/to/sdlc/notes
 ```
 
-With Discord notifications:
+With Discord notifications (see [docs/discord-setup.md](discord-setup.md) for full setup guide):
 
 ```bash
+export DISCORD_BOT_TOKEN="your-bot-token"  # one-time setup
+
 pipelineforge run \
   --feature "Add rate limiting to API" \
   --proxy \
