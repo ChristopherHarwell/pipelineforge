@@ -8,6 +8,7 @@ import type { ContainerResult } from "@pftypes/Pipeline.ts";
 import type { SessionId, SessionCompletionResult } from "@pftypes/ProxySession.ts";
 import { toSessionId } from "@pftypes/ProxySession.ts";
 import type { PipelineLogger } from "@pftypes/Logger.ts";
+import type { VoidPromise } from "@pftypes/TypeUtils.ts";
 
 const execFileAsync: typeof execFile.__promisify__ = promisify(execFile);
 
@@ -108,10 +109,10 @@ export class ProxySessionManager implements StreamingExecutionBackend {
    * Kill all active sessions (cleanup on pipeline abort).
    * OpenClaw sessions are cleaned up via the sandbox recreate command.
    */
-  readonly killAll = async (): Promise<void> => {
-    const kills: ReadonlyArray<Promise<void>> = Array.from(
+  readonly killAll = async (): VoidPromise => {
+    const kills: ReadonlyArray<VoidPromise> = Array.from(
       this.activeSessions.entries(),
-    ).map(async ([_nodeId, _sessionId]: [string, SessionId]): Promise<void> => {
+    ).map(async ([_nodeId, _sessionId]: [string, SessionId]): VoidPromise => {
       // OpenClaw manages session lifecycle through the gateway;
       // sandbox containers are cleaned up when the gateway stops.
     });
@@ -188,36 +189,43 @@ export class ProxySessionManager implements StreamingExecutionBackend {
       });
     }
 
-    // Build completion promise
-    const completionPromise: Promise<StreamCompletionEvent> = new Promise<StreamCompletionEvent>(
-      (resolve: (value: StreamCompletionEvent) => void): void => {
-        child.on("close", (code: number | null): void => {
-          outputStream.end();
-          this.activeSessions.delete(node.id);
-          this.activeProcesses.delete(node.id);
+    // ES2024: Promise.withResolvers() — cleaner than wrapping in
+    // `new Promise()`. Returns { promise, resolve, reject } so you
+    // can resolve from outside the constructor callback.
+    const { promise: completionPromise, resolve: resolveCompletion } =
+      Promise.withResolvers<StreamCompletionEvent>();
 
-          resolve({
-            type: "completion",
-            exitCode: code ?? 1,
-            fullOutput: Buffer.concat(outputChunks).toString("utf-8"),
-            durationMs: Date.now() - startTime,
-          });
-        });
-      },
-    );
+    child.on("close", (code: number | null): void => {
+      outputStream.end();
+      this.activeSessions.delete(node.id);
+      this.activeProcesses.delete(node.id);
+
+      resolveCompletion({
+        type: "completion",
+        exitCode: code ?? 1,
+        fullOutput: Buffer.concat(outputChunks).toString("utf-8"),
+        durationMs: Date.now() - startTime,
+      });
+    });
+
+    // ES2025: Symbol.asyncDispose — the kill() logic runs automatically
+    // when the handle leaves an `await using` scope. Manual kill() is
+    // still available for explicit cleanup outside `await using`.
+    const killFn: () => VoidPromise = async (): VoidPromise => {
+      child.kill("SIGTERM");
+      this.activeSessions.delete(node.id);
+      this.activeProcesses.delete(node.id);
+    };
 
     const handle: StreamingSessionHandle = {
       sessionId,
       outputStream,
-      sendMessage: async (message: string): Promise<void> => {
-        await this.sendSessionMessage(sessionId, message);
+      sendMessage: async (message: string): Promise<string> => {
+        return this.sendSessionMessage(sessionId, message);
       },
       waitForCompletion: (): Promise<StreamCompletionEvent> => completionPromise,
-      kill: async (): Promise<void> => {
-        child.kill("SIGTERM");
-        this.activeSessions.delete(node.id);
-        this.activeProcesses.delete(node.id);
-      },
+      kill: killFn,
+      [Symbol.asyncDispose]: killFn,
     };
 
     return handle;
@@ -228,12 +236,13 @@ export class ProxySessionManager implements StreamingExecutionBackend {
    *
    * @param sessionId - The target session
    * @param message - The message to inject
+   * @returns The agent's response output (stdout from the subprocess)
    */
   readonly sendSessionMessage = async (
     sessionId: SessionId,
     message: string,
-  ): Promise<void> => {
-    await execFileAsync(OPENCLAW_CLI, [
+  ): Promise<string> => {
+    const { stdout } = await execFileAsync(OPENCLAW_CLI, [
       "agent",
       "--session-id",
       sessionId,
@@ -241,6 +250,7 @@ export class ProxySessionManager implements StreamingExecutionBackend {
       message,
       "--json",
     ]);
+    return stdout;
   };
 
   // ── CLI Subprocess Helpers ──────────────────────────────────────
@@ -475,7 +485,7 @@ export class ProxySessionManager implements StreamingExecutionBackend {
     );
   }
 
-  private sleep(ms: number): Promise<void> {
+  private sleep(ms: number): VoidPromise {
     return new Promise<void>((resolve: () => void): void => {
       setTimeout(resolve, ms);
     });
