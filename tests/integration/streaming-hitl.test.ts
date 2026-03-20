@@ -103,18 +103,21 @@ function createMockStreamingBackend(
           sessionId,
           outputStream: stream,
           sendMessage: vi.fn().mockImplementation(
-            async (msg: string): Promise<void> => {
+            async (msg: string): Promise<string> => {
               sentMessages.push(msg);
+              return "";
             },
           ),
           waitForCompletion: (): Promise<StreamCompletionEvent> => completionPromise,
           kill: vi.fn().mockResolvedValue(undefined),
+          [Symbol.asyncDispose]: vi.fn().mockResolvedValue(undefined),
         };
       },
     ),
     sendSessionMessage: vi.fn().mockImplementation(
-      async (_sid: SessionId, msg: string): Promise<void> => {
+      async (_sid: SessionId, msg: string): Promise<string> => {
         sentMessages.push(msg);
+        return "";
       },
     ),
   };
