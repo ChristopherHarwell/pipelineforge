@@ -105,6 +105,87 @@ export class OpenClawAgentRegistrar {
     }
   }
 
+  // ── Discord Channel Registration ────────────────────────────────
+
+  /**
+   * Register Discord as a channel with OpenClaw if not already configured.
+   * Reads the bot token from `DISCORD_BOT_TOKEN` env var.
+   *
+   * @returns true if registration succeeded or was already configured
+   */
+  async ensureDiscordChannel(): Promise<boolean> {
+    // Check if Discord is already configured
+    const isConfigured: boolean = await this.isDiscordConfigured();
+    if (isConfigured) {
+      this.logger.pipelineEvent("info", "Discord channel already configured");
+      return true;
+    }
+
+    const botToken: string | undefined = process.env["DISCORD_BOT_TOKEN"];
+    if (botToken === undefined || botToken.length === 0) {
+      this.logger.pipelineEvent(
+        "warn",
+        "DISCORD_BOT_TOKEN not set — skipping Discord channel registration. " +
+        "Set the env var and re-run, or register manually: " +
+        "openclaw channels add --channel discord --token <YOUR_BOT_TOKEN>",
+      );
+      return false;
+    }
+
+    try {
+      await execFileAsync(OPENCLAW_CLI, [
+        "channels",
+        "add",
+        "--channel",
+        "discord",
+        "--token",
+        botToken,
+      ]);
+
+      this.logger.pipelineEvent("info", "Discord channel registered with OpenClaw");
+      return true;
+    } catch (err: unknown) {
+      const message: string = err instanceof Error ? err.message : "Unknown error";
+      this.logger.pipelineEvent(
+        "warn",
+        `Failed to register Discord channel: ${message}`,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Check whether Discord is already configured in OpenClaw.
+   *
+   * @returns true if Discord channel exists
+   */
+  private async isDiscordConfigured(): Promise<boolean> {
+    try {
+      const { stdout } = await execFileAsync(OPENCLAW_CLI, [
+        "channels",
+        "list",
+        "--json",
+      ]);
+
+      const parsed: unknown = JSON.parse(stdout);
+      if (parsed === null || typeof parsed !== "object") {
+        return false;
+      }
+
+      const obj: Record<string, unknown> = parsed as Record<string, unknown>;
+
+      // Check for discord key in chat object
+      if (obj["chat"] !== null && typeof obj["chat"] === "object") {
+        const chat: Record<string, unknown> = obj["chat"] as Record<string, unknown>;
+        return "discord" in chat;
+      }
+
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
   // ── Private Helpers ───────────────────────────────────────────────
 
   /**
