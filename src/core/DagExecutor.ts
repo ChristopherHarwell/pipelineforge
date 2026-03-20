@@ -24,6 +24,7 @@ import { ResponseResolver } from "@core/ResponseResolver.ts";
 import { QuestionDetector } from "@core/QuestionDetector.ts";
 import type { QuestionDetectionResult } from "@core/QuestionDetector.ts";
 import type { DiscordMessageId, NotificationType } from "@pftypes/Discord.ts";
+import type { VoidPromise } from "@pftypes/TypeUtils.ts";
 import { NodeFSM, createNodeFSM } from "@core/NodeFSM.ts";
 import type { StateId, TransitionEvent } from "@core/NodeFSM.ts";
 import { PipelineFSM, createPipelineFSM } from "@core/PipelineFSM.ts";
@@ -441,7 +442,7 @@ export class DagExecutor {
 
     const rl = createReadlineInterface({ input: handle.outputStream });
 
-    rl.on("line", async (line: string): Promise<void> => {
+    rl.on("line", async (line: string): VoidPromise => {
       rollingWindow.push(line);
       if (rollingWindow.length > ROLLING_WINDOW_SIZE) {
         rollingWindow.shift();
@@ -503,9 +504,71 @@ export class DagExecutor {
     });
 
     // ── Wait for session to complete ────────────────────────────
-    const completion: StreamCompletionEvent = await handle.waitForCompletion();
+    let completion: StreamCompletionEvent = await handle.waitForCompletion();
 
     rl.close();
+
+    // ── Post-completion question detection on extracted text ─────
+    // The openclaw CLI returns JSON with agent text in
+    // result.payloads[].text — the line-by-line detector above
+    // can't see questions inside JSON strings. Extract and check.
+    let extractedText: string = this.extractAgentText(completion.fullOutput);
+    let questionLoop: number = 0;
+    const MAX_QUESTION_LOOPS: number = 5;
+
+    while (this.inputRacer !== null && questionLoop < MAX_QUESTION_LOOPS) {
+      const postDetection: QuestionDetectionResult =
+        this.questionDetector.detect(extractedText);
+
+      const postQuestions: ReadonlyArray<string> = postDetection.questions.filter(
+        (q: string): boolean => !answeredQuestions.has(q),
+      );
+
+      if (!postDetection.detected || postQuestions.length === 0) {
+        break;
+      }
+
+      const postQuestionText: string = postQuestions.join("\n");
+
+      for (const q of postQuestions) {
+        answeredQuestions.add(q);
+      }
+
+      this.logger.nodeEvent(
+        "info",
+        this.toLogEvent(node),
+        `Agent question detected in response (confidence: ${String(postDetection.confidence)})`,
+      );
+
+      this.applyNodeEvent(fsm, "AGENT_QUESTION");
+
+      // Prompt the user via CLI and/or Discord
+      const postInput: UserInput = await this.inputRacer.race(postQuestionText);
+
+      this.applyNodeEvent(fsm, "ANSWER_RECEIVED");
+
+      this.logger.nodeEvent(
+        "info",
+        this.toLogEvent(node),
+        `Answer received from ${postInput.source}: "${postInput.content.slice(0, 80)}"`,
+      );
+
+      if (postInput.source === "cli" && this.notificationRouter !== null) {
+        await this.notificationRouter.sendUpdate(
+          `Answer provided via CLI for ${node.id}: "${postInput.content.slice(0, 200)}"`,
+        );
+      }
+
+      // Send follow-up and capture the response output directly —
+      // sendMessage now returns the subprocess stdout instead of void.
+      // The old code re-awaited handle.waitForCompletion() which
+      // returned the same resolved promise with stale data.
+      const followUpOutput: string = await handle.sendMessage(postInput.content);
+      extractedText = this.extractAgentText(followUpOutput);
+      completion = { ...completion, fullOutput: followUpOutput };
+
+      questionLoop++;
+    }
 
     const result: ContainerResult = {
       stdout: completion.fullOutput,
@@ -805,8 +868,9 @@ export class DagExecutor {
       return null;
     }
 
+    const textToCheck: string = this.extractAgentText(result.stdout);
     const detection: QuestionDetectionResult = this.questionDetector.detect(
-      result.stdout,
+      textToCheck,
     );
 
     if (detection.detected && fsm.canTransition("AGENT_QUESTION")) {
@@ -814,6 +878,51 @@ export class DagExecutor {
     }
 
     return null;
+  }
+
+  // ── Agent Text Extraction ────────────────────────────────────────
+  // OpenClaw's `--json` output wraps agent text in a JSON blob at
+  // result.payloads[].text. Extract human-readable text so the
+  // question detector can match patterns like "What do you want?".
+  // Falls back to raw output if JSON parsing fails.
+
+  private extractAgentText(jsonOutput: string): string {
+    try {
+      const parsed: unknown = JSON.parse(jsonOutput.trim());
+
+      // ES2022: Object.hasOwn() — safer than `in` operator because it
+      // doesn't walk the prototype chain. `"toString" in obj` is true
+      // for all objects; `Object.hasOwn(obj, "toString")` is not.
+      if (parsed !== null && typeof parsed === "object" && Object.hasOwn(parsed, "result")) {
+        const obj: Record<string, unknown> = parsed as Record<string, unknown>;
+        const result: unknown = obj["result"];
+
+        if (result !== null && typeof result === "object" && Object.hasOwn(result, "payloads")) {
+          const resultObj: Record<string, unknown> = result as Record<string, unknown>;
+          const payloads: unknown = resultObj["payloads"];
+
+          if (Array.isArray(payloads)) {
+            const extracted: string = payloads
+              .filter(
+                (p: unknown): boolean =>
+                  p !== null &&
+                  typeof p === "object" &&
+                  typeof (p as Record<string, unknown>)["text"] === "string",
+              )
+              .map((p: unknown): string => (p as Record<string, unknown>)["text"] as string)
+              .join("\n");
+
+            // Only return extracted text if we actually found some
+            if (extracted.length > 0) {
+              return extracted;
+            }
+          }
+        }
+      }
+    } catch {
+      // Not JSON or unexpected structure — return raw
+    }
+    return jsonOutput;
   }
 
   // ── FSM Event Application ─────────────────────────────────────────
