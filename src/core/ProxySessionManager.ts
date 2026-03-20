@@ -67,8 +67,39 @@ export class ProxySessionManager implements StreamingExecutionBackend {
       `Spawning proxy session for ${agentName}...`,
     );
 
-    // ── Spawn session via CLI ────────────────────────────────────
-    const sessionId: SessionId = await this.spawnAgentSession(agentName, prompt);
+    // ── Run agent via CLI ────────────────────────────────────────
+    // `openclaw agent --json` is a blocking command — it runs the
+    // full agent and returns a completion JSON. If the response
+    // already contains the result, return it directly instead of
+    // polling for a session that has already finished.
+    const { stdout } = await execFileAsync(OPENCLAW_CLI, [
+      "agent",
+      "--agent",
+      agentName,
+      "-m",
+      prompt,
+      "--json",
+    ], { timeout: timeoutMs });
+
+    const durationMs: number = Date.now() - startTime;
+
+    // ── Check for immediate completion ───────────────────────────
+    // ES2022: Object.hasOwn() — safe prototype-free property check
+    const immediateResult: ContainerResult | null =
+      ProxySessionManager.tryParseCompletedResult(stdout, durationMs);
+
+    if (immediateResult !== null) {
+      this.logger.pipelineEvent(
+        "info",
+        `Agent ${agentName} completed immediately (${String(durationMs)}ms)`,
+      );
+      return immediateResult;
+    }
+
+    // ── Fall through: extract session ID and poll ────────────────
+    // Some openclaw configurations return a session handle for
+    // long-running agents that run asynchronously on the gateway.
+    const sessionId: SessionId = toSessionId(this.extractSessionId(stdout));
     this.activeSessions.set(node.id, sessionId);
 
     this.logger.pipelineEvent(
@@ -410,6 +441,55 @@ export class ProxySessionManager implements StreamingExecutionBackend {
       exitCode,
       durationMs: Date.now() - startTime,
     };
+  }
+
+  // ── Immediate Completion Detection ──────────────────────────────
+  // `openclaw agent --json` blocks until the agent finishes. The
+  // response is a full result JSON with `status`, `result.payloads`,
+  // and `result.meta`. Detect this shape and return a ContainerResult
+  // directly — no session ID extraction or polling needed.
+
+  /**
+   * Attempt to parse a completed agent result from raw CLI output.
+   * Returns null if the output is not a completed result JSON.
+   *
+   * @param stdout - Raw CLI output from `openclaw agent --json`
+   * @param durationMs - Elapsed time since the command was spawned
+   * @returns ContainerResult if the response is a completed result, null otherwise
+   */
+  static tryParseCompletedResult(
+    stdout: string,
+    durationMs: number,
+  ): ContainerResult | null {
+    try {
+      const parsed: unknown = JSON.parse(stdout.trim());
+
+      if (parsed === null || typeof parsed !== "object") {
+        return null;
+      }
+
+      const obj: Record<string, unknown> = parsed as Record<string, unknown>;
+
+      // OpenClaw completion shape: { status: "ok", result: { payloads: [...] } }
+      if (obj["status"] !== "ok" && obj["status"] !== "completed" && obj["status"] !== "done") {
+        return null;
+      }
+
+      // Must have a result or payloads — distinguishes completion
+      // from a session-creation response
+      if (!Object.hasOwn(obj, "result") && !Object.hasOwn(obj, "payloads")) {
+        return null;
+      }
+
+      return {
+        stdout,
+        stderr: "",
+        exitCode: 0,
+        durationMs,
+      };
+    } catch {
+      return null;
+    }
   }
 
   // ── Parsing Helpers ───────────────────────────────────────────────
