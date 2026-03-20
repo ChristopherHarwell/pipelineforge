@@ -874,6 +874,40 @@ export class DagExecutor {
     return null;
   }
 
+  // ── JSON Line Text Extraction ────────────────────────────────────
+  // During streaming, each line from the subprocess is raw JSON.
+  // Lines like `"text": "Which repo?\nWhich branch?"` contain agent
+  // text inside a JSON string value. This helper extracts and
+  // unescapes the value so the rolling-window question detector can
+  // see real text instead of JSON syntax.
+
+  /**
+   * Extract text from a JSON `"text": "..."` line.
+   * Returns the unescaped string value, or the original line if
+   * it doesn't match the pattern.
+   *
+   * @param line - A raw output line from the streaming subprocess
+   * @returns Extracted text or the original line
+   */
+  static extractJsonTextField(line: string): string {
+    // Match JSON key "text" with a string value — handles the common
+    // OpenClaw output format: `"text": "agent says...",`
+    const match: RegExpMatchArray | null = line.match(
+      /^\s*"text"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,?\s*$/,
+    );
+
+    if (match?.[1] === undefined) {
+      return line;
+    }
+
+    // JSON.parse to unescape \n, \", \uXXXX etc.
+    try {
+      return JSON.parse(`"${match[1]}"`) as string;
+    } catch {
+      return line;
+    }
+  }
+
   // ── Agent Text Extraction ────────────────────────────────────────
   // OpenClaw's `--json` output wraps agent text in a JSON blob at
   // result.payloads[].text. Extract human-readable text so the
