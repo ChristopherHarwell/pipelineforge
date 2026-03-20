@@ -110,7 +110,7 @@ pipelineforge sync \
 
 This updates:
 - `openclaw.json` -- adds a new agent entry for `my-new-skill` with model/tools/sandbox
-- `full-sdlc.lobster` -- adds a new step: `openclaw sessions spawn --agent my-new-skill`
+- `full-sdlc.lobster` -- adds a new step: `openclaw agent --agent my-new-skill -m "<prompt>" --json`
 
 ## 6. Run the pipeline
 

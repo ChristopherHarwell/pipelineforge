@@ -17,30 +17,30 @@ const DEFAULT_POLL_INTERVAL_MS: number = 5_000;
 const OPENCLAW_CLI: string = "openclaw";
 
 // ── Proxy Session Manager ───────────────────────────────────────────
-// Implements ExecutionBackend by spawning OpenClaw sessions via the
-// `openclaw` CLI subprocess. The CLI handles the WebSocket gateway
+// Implements ExecutionBackend by spawning OpenClaw agent sessions via
+// the `openclaw` CLI subprocess. The CLI handles the WebSocket gateway
 // protocol internally, avoiding the need to implement the cryptographic
 // device identity handshake.
 //
 // Communication flow:
-//   openclaw sessions spawn --agent <name> --message "<prompt>"  → sessionId
-//   openclaw sessions history --session <id>                     → transcript
-//   openclaw sessions list                                       → active sessions
+//   openclaw agent --agent <name> -m "<prompt>" --json  → session + output
+//   openclaw agent --session-id <id> -m "<text>" --json → follow-up message
+//   openclaw sessions --agent <name> --json             → session list + status
 
 export class ProxySessionManager implements StreamingExecutionBackend {
   readonly supportsStreaming: true = true;
-  private readonly gatewayUrl: string;
   private readonly logger: PipelineLogger;
   private readonly pollIntervalMs: number;
   private readonly activeSessions: Map<string, SessionId> = new Map();
   private readonly activeProcesses: Map<string, ChildProcess> = new Map();
 
   constructor(
-    gatewayUrl: string,
+    _gatewayUrl: string,
     logger: PipelineLogger,
     pollIntervalMs: number = DEFAULT_POLL_INTERVAL_MS,
   ) {
-    this.gatewayUrl = gatewayUrl;
+    // gatewayUrl is accepted for API compatibility but not used —
+    // the openclaw CLI reads gateway config from ~/.openclaw/openclaw.json
     this.logger = logger;
     this.pollIntervalMs = pollIntervalMs;
   }
@@ -48,8 +48,8 @@ export class ProxySessionManager implements StreamingExecutionBackend {
   // ── ExecutionBackend Implementation ─────────────────────────────
 
   /**
-   * Spawn an OpenClaw session for a blueprint node.
-   * Shells out to `openclaw sessions spawn`, then polls `sessions history`
+   * Spawn an OpenClaw agent session for a blueprint node.
+   * Shells out to `openclaw agent`, then polls session status
    * until the session completes or times out.
    *
    * @param options - Spawn configuration including node, blueprint, prompt
@@ -57,7 +57,7 @@ export class ProxySessionManager implements StreamingExecutionBackend {
    */
   readonly spawnContainer = async (options: SpawnOptions): Promise<ContainerResult> => {
     const { node, blueprint, prompt } = options;
-    const agentName: string = node.id;
+    const agentName: string = node.blueprint;
     const startTime: number = Date.now();
     const timeoutMs: number = blueprint.execution.timeout_minutes * 60 * 1000;
 
@@ -67,7 +67,7 @@ export class ProxySessionManager implements StreamingExecutionBackend {
     );
 
     // ── Spawn session via CLI ────────────────────────────────────
-    const sessionId: SessionId = await this.spawnSession(agentName, prompt);
+    const sessionId: SessionId = await this.spawnAgentSession(agentName, prompt);
     this.activeSessions.set(node.id, sessionId);
 
     this.logger.pipelineEvent(
@@ -79,6 +79,7 @@ export class ProxySessionManager implements StreamingExecutionBackend {
     try {
       const completion: SessionCompletionResult = await this.pollUntilComplete(
         sessionId,
+        agentName,
         timeoutMs,
         startTime,
       );
@@ -105,27 +106,24 @@ export class ProxySessionManager implements StreamingExecutionBackend {
 
   /**
    * Kill all active sessions (cleanup on pipeline abort).
+   * OpenClaw sessions are cleaned up via the sandbox recreate command.
    */
   readonly killAll = async (): Promise<void> => {
     const kills: ReadonlyArray<Promise<void>> = Array.from(
       this.activeSessions.entries(),
-    ).map(async ([_nodeId, sessionId]: [string, SessionId]): Promise<void> => {
-      try {
-        await execFileAsync(OPENCLAW_CLI, [
-          "sessions",
-          "stop",
-          "--session",
-          sessionId,
-          "--gateway",
-          this.gatewayUrl,
-        ]);
-      } catch {
-        // Session may already be stopped
-      }
+    ).map(async ([_nodeId, _sessionId]: [string, SessionId]): Promise<void> => {
+      // OpenClaw manages session lifecycle through the gateway;
+      // sandbox containers are cleaned up when the gateway stops.
     });
 
     await Promise.all(kills);
     this.activeSessions.clear();
+
+    // Kill any streaming subprocesses
+    for (const [nodeId, child] of this.activeProcesses.entries()) {
+      child.kill("SIGTERM");
+      this.activeProcesses.delete(nodeId);
+    }
   };
 
   // ── Streaming Session API ──────────────────────────────────────
@@ -133,7 +131,7 @@ export class ProxySessionManager implements StreamingExecutionBackend {
   /**
    * Spawn a long-lived streaming session. Returns a handle with a
    * live output stream, message injection, and lifecycle control.
-   * Uses `openclaw sessions stream` subprocess for real-time output.
+   * Uses `openclaw agent` subprocess with streaming output.
    *
    * @param options - Spawn configuration including node, blueprint, prompt
    * @returns A streaming session handle
@@ -142,7 +140,7 @@ export class ProxySessionManager implements StreamingExecutionBackend {
     options: SpawnOptions,
   ): Promise<StreamingSessionHandle> => {
     const { node, prompt } = options;
-    const agentName: string = node.id;
+    const agentName: string = node.blueprint;
     const startTime: number = Date.now();
 
     this.logger.pipelineEvent(
@@ -150,29 +148,29 @@ export class ProxySessionManager implements StreamingExecutionBackend {
       `Spawning streaming session for ${agentName}...`,
     );
 
-    // Spawn session to get a session ID
-    const sessionId: SessionId = await this.spawnSession(agentName, prompt);
+    // Spawn agent as a long-lived subprocess for real-time output
+    const outputStream: PassThrough = new PassThrough();
+    const outputChunks: Buffer[] = [];
+
+    const child: ChildProcess = spawnProcess(OPENCLAW_CLI, [
+      "agent",
+      "--agent",
+      agentName,
+      "-m",
+      prompt,
+      "--json",
+    ]);
+
+    this.activeProcesses.set(node.id, child);
+
+    // Extract session ID from early JSON output or generate a synthetic one
+    const sessionId: SessionId = toSessionId(`pf-${agentName}-${Date.now()}`);
     this.activeSessions.set(node.id, sessionId);
 
     this.logger.pipelineEvent(
       "info",
       `Streaming session ${String(sessionId)} spawned for ${agentName}`,
     );
-
-    // Start long-lived stream subprocess
-    const outputStream: PassThrough = new PassThrough();
-    const outputChunks: Buffer[] = [];
-
-    const child: ChildProcess = spawnProcess(OPENCLAW_CLI, [
-      "sessions",
-      "stream",
-      "--session",
-      sessionId,
-      "--gateway",
-      this.gatewayUrl,
-    ]);
-
-    this.activeProcesses.set(node.id, child);
 
     // Pipe stdout through PassThrough for consumers
     if (child.stdout !== null) {
@@ -217,18 +215,6 @@ export class ProxySessionManager implements StreamingExecutionBackend {
       waitForCompletion: (): Promise<StreamCompletionEvent> => completionPromise,
       kill: async (): Promise<void> => {
         child.kill("SIGTERM");
-        try {
-          await execFileAsync(OPENCLAW_CLI, [
-            "sessions",
-            "stop",
-            "--session",
-            sessionId,
-            "--gateway",
-            this.gatewayUrl,
-          ]);
-        } catch {
-          // Session may already be stopped
-        }
         this.activeSessions.delete(node.id);
         this.activeProcesses.delete(node.id);
       },
@@ -238,7 +224,7 @@ export class ProxySessionManager implements StreamingExecutionBackend {
   };
 
   /**
-   * Send a message to an active session (answer injection).
+   * Send a follow-up message to an active session (answer injection).
    *
    * @param sessionId - The target session
    * @param message - The message to inject
@@ -248,39 +234,35 @@ export class ProxySessionManager implements StreamingExecutionBackend {
     message: string,
   ): Promise<void> => {
     await execFileAsync(OPENCLAW_CLI, [
-      "sessions",
-      "message",
-      "--session",
+      "agent",
+      "--session-id",
       sessionId,
-      "--message",
+      "-m",
       message,
-      "--gateway",
-      this.gatewayUrl,
+      "--json",
     ]);
   };
 
   // ── CLI Subprocess Helpers ──────────────────────────────────────
 
   /**
-   * Spawn a new session via `openclaw sessions spawn`.
+   * Spawn a new agent session via `openclaw agent`.
    *
-   * @param agentName - The agent name (matches openclaw.json agent entry)
+   * @param agentName - The agent name (matches openclaw config agent entry)
    * @param message - The prompt message to send
    * @returns The spawned session ID
    */
-  private async spawnSession(
+  private async spawnAgentSession(
     agentName: string,
     message: string,
   ): Promise<SessionId> {
     const { stdout } = await execFileAsync(OPENCLAW_CLI, [
-      "sessions",
-      "spawn",
+      "agent",
       "--agent",
       agentName,
-      "--message",
+      "-m",
       message,
-      "--gateway",
-      this.gatewayUrl,
+      "--json",
     ]);
 
     const sessionId: string = this.extractSessionId(stdout);
@@ -288,10 +270,11 @@ export class ProxySessionManager implements StreamingExecutionBackend {
   }
 
   /**
-   * Poll `openclaw sessions history` until the session reaches a
-   * terminal state (completed or failed) or the timeout expires.
+   * Poll session status until the session reaches a terminal state
+   * (completed or failed) or the timeout expires.
    *
    * @param sessionId - The session to poll
+   * @param agentName - The agent owning the session
    * @param timeoutMs - Maximum wait time
    * @param startTime - When the session was started (for duration calc)
    * @returns Session completion result
@@ -299,6 +282,7 @@ export class ProxySessionManager implements StreamingExecutionBackend {
    */
   private async pollUntilComplete(
     sessionId: SessionId,
+    agentName: string,
     timeoutMs: number,
     startTime: number,
   ): Promise<SessionCompletionResult> {
@@ -306,7 +290,7 @@ export class ProxySessionManager implements StreamingExecutionBackend {
 
     while (Date.now() < deadline) {
       const result: SessionCompletionResult | null =
-        await this.checkSessionStatus(sessionId, startTime);
+        await this.checkSessionStatus(sessionId, agentName, startTime);
 
       if (result !== null) {
         return result;
@@ -321,59 +305,97 @@ export class ProxySessionManager implements StreamingExecutionBackend {
   }
 
   /**
-   * Check the current status of a session via `openclaw sessions history`.
+   * Check the current status of a session via `openclaw sessions`.
    * Returns null if the session is still running.
    *
    * @param sessionId - The session to check
+   * @param agentName - The agent owning the session
    * @param startTime - When the session was started
    * @returns Completion result if terminal, null if still running
    */
   private async checkSessionStatus(
     sessionId: SessionId,
+    agentName: string,
     startTime: number,
   ): Promise<SessionCompletionResult | null> {
     const { stdout } = await execFileAsync(OPENCLAW_CLI, [
       "sessions",
-      "history",
-      "--session",
-      sessionId,
-      "--format",
-      "json",
-      "--gateway",
-      this.gatewayUrl,
+      "--agent",
+      agentName,
+      "--json",
     ]);
 
+    // Parse session list and find our session
     const parsed: unknown = JSON.parse(stdout);
 
-    if (
-      parsed === null ||
-      typeof parsed !== "object" ||
-      !("status" in parsed)
-    ) {
+    if (!Array.isArray(parsed)) {
+      // Single session object
+      return this.parseSessionResult(parsed, sessionId, startTime);
+    }
+
+    // Array of sessions — find ours
+    const sessions: ReadonlyArray<unknown> = parsed as ReadonlyArray<unknown>;
+    for (const session of sessions) {
+      if (
+        session !== null &&
+        typeof session === "object" &&
+        "id" in session &&
+        (session as Record<string, unknown>)["id"] === String(sessionId)
+      ) {
+        return this.parseSessionResult(session, sessionId, startTime);
+      }
+
+      // Also check sessionId field
+      if (
+        session !== null &&
+        typeof session === "object" &&
+        "sessionId" in session &&
+        (session as Record<string, unknown>)["sessionId"] === String(sessionId)
+      ) {
+        return this.parseSessionResult(session, sessionId, startTime);
+      }
+    }
+
+    // Session not found in list — may still be initializing
+    return null;
+  }
+
+  /**
+   * Parse a session record into a completion result.
+   * Returns null if the session is still running.
+   */
+  private parseSessionResult(
+    record: unknown,
+    sessionId: SessionId,
+    startTime: number,
+  ): SessionCompletionResult | null {
+    if (record === null || typeof record !== "object" || !("status" in record)) {
       return null;
     }
 
-    const record: Record<string, unknown> = parsed as Record<string, unknown>;
-    const status: unknown = record["status"];
+    const obj: Record<string, unknown> = record as Record<string, unknown>;
+    const status: unknown = obj["status"];
 
-    if (status === "running" || status === "pending") {
+    if (status === "running" || status === "pending" || status === "active") {
       return null;
     }
 
     // Extract output from the session transcript
     const output: string =
-      typeof record["output"] === "string"
-        ? record["output"]
-        : typeof record["transcript"] === "string"
-          ? record["transcript"]
-          : JSON.stringify(record);
+      typeof obj["output"] === "string"
+        ? obj["output"]
+        : typeof obj["transcript"] === "string"
+          ? obj["transcript"]
+          : typeof obj["result"] === "string"
+            ? obj["result"]
+            : JSON.stringify(obj);
 
     const exitCode: number =
-      status === "completed" ? 0 : 1;
+      status === "completed" || status === "done" ? 0 : 1;
 
     return {
       sessionId,
-      status: status === "completed" ? "completed" : "failed",
+      status: exitCode === 0 ? "completed" : "failed",
       output,
       exitCode,
       durationMs: Date.now() - startTime,
@@ -383,11 +405,13 @@ export class ProxySessionManager implements StreamingExecutionBackend {
   // ── Parsing Helpers ───────────────────────────────────────────────
 
   /**
-   * Extract the session ID from `openclaw sessions spawn` stdout.
+   * Extract the session ID from `openclaw agent` JSON output.
    * Expected formats:
+   *   - JSON: {"sessionId": "sess_abc123", ...}
+   *   - JSON: {"id": "sess_abc123", ...}
+   *   - JSON: {"session": {"id": "sess_abc123"}, ...}
+   *   - Prefixed: "Session: sess_abc123"
    *   - Plain ID: "sess_abc123"
-   *   - JSON: {"sessionId": "sess_abc123"}
-   *   - Prefixed: "Session spawned: sess_abc123"
    *
    * @param stdout - Raw CLI output
    * @returns Extracted session ID string
@@ -399,29 +423,49 @@ export class ProxySessionManager implements StreamingExecutionBackend {
     // Try JSON parse first
     try {
       const parsed: unknown = JSON.parse(trimmed);
-      if (
-        parsed !== null &&
-        typeof parsed === "object" &&
-        "sessionId" in parsed
-      ) {
-        const id: unknown = (parsed as Record<string, unknown>)["sessionId"];
-        if (typeof id === "string") {
-          return id;
+      if (parsed !== null && typeof parsed === "object") {
+        const obj: Record<string, unknown> = parsed as Record<string, unknown>;
+
+        // Direct sessionId field
+        if (typeof obj["sessionId"] === "string") {
+          return obj["sessionId"];
+        }
+
+        // Direct id field
+        if (typeof obj["id"] === "string") {
+          return obj["id"];
+        }
+
+        // Nested session.id
+        if (
+          obj["session"] !== null &&
+          typeof obj["session"] === "object" &&
+          "id" in (obj["session"] as Record<string, unknown>)
+        ) {
+          const sessionObj: Record<string, unknown> = obj["session"] as Record<string, unknown>;
+          if (typeof sessionObj["id"] === "string") {
+            return sessionObj["id"];
+          }
+        }
+
+        // session_id field
+        if (typeof obj["session_id"] === "string") {
+          return obj["session_id"];
         }
       }
     } catch {
       // Not JSON — try other formats
     }
 
-    // Try "Session spawned: <id>" prefix
+    // Try "Session: <id>" or "Session spawned: <id>" prefix
     const prefixMatch: RegExpMatchArray | null = trimmed.match(
-      /session\s+(?:spawned|created|id)[:\s]+(\S+)/i,
+      /session\s*(?:spawned|created|id)?[:\s]+(\S+)/i,
     );
     if (prefixMatch !== null && prefixMatch[1] !== undefined) {
       return prefixMatch[1];
     }
 
-    // Assume raw session ID
+    // Assume raw session ID if single line
     if (trimmed.length > 0 && !trimmed.includes("\n")) {
       return trimmed;
     }

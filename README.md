@@ -66,12 +66,12 @@ pipelineforge sync --generate-config --generate-lobster
 
 lobster run full-sdlc.lobster
        |
-       +-- Step: openclaw sessions spawn --agent project-init --message "..."
+       +-- Step: openclaw agent --agent project-init -m "..." --json
        |         --> OpenClaw gateway reads openclaw.json agent config
        |         --> spawns container with model/tools/sandbox from config
        |         --> agent runs, returns output
        |
-       +-- Step: openclaw sessions spawn --agent assign-tickets --message "..."
+       +-- Step: openclaw agent --agent assign-tickets -m "..." --json
        |         (receives prior step stdout as context)
        |
        +-- Approval gate: approve-tickets
@@ -96,7 +96,7 @@ See [docs/running-the-pipeline.md](docs/running-the-pipeline.md) for a quick-sta
 | **Skill Parser** | `src/core/SkillFrontmatterParser.ts` | Discovers skills, extracts YAML frontmatter from SKILL.md |
 | **Blueprint Syncer** | `src/core/BlueprintSyncer.ts` | Merges derivable fields into blueprint YAML, preserves manual config |
 | **OpenClaw Config Syncer** | `src/core/OpenClawConfigSyncer.ts` | Generates `openclaw.json` gateway configs from blueprints |
-| **Lobster Generator** | `src/core/LobsterWorkflowGenerator.ts` | Generates `.lobster` workflow files with `openclaw sessions spawn` steps |
+| **Lobster Generator** | `src/core/LobsterWorkflowGenerator.ts` | Generates `.lobster` workflow files with `openclaw agent` steps |
 | **Blueprint Registry** | `src/core/BlueprintRegistry.ts` | Loads and validates blueprint YAML files from `blueprints/` |
 | **DAG Builder** | `src/core/DagBuilder.ts` | Resolves dependencies into a topologically sorted execution graph with cycle detection |
 | **DAG Executor** | `src/core/DagExecutor.ts` | Pure FSM-driven scheduler -- walks the graph, dispatches ready nodes, handles pause/resume |
@@ -203,7 +203,7 @@ lobster run --mode tool --file pipelines/full-sdlc.lobster \
   }'
 ```
 
-Each Lobster step invokes `openclaw sessions spawn --agent <name>` which:
+Each Lobster step invokes `openclaw agent --agent <name> -m "<prompt>" --json` which:
 1. Reads the agent config from `openclaw.json` (model, tools, sandbox)
 2. Spawns a Docker container with the configured image and mounts
 3. Runs the Claude Code agent inside the container
@@ -308,7 +308,7 @@ pipelineforge/
 |   |   +-- DagExecutor.ts              # Pure FSM-driven DAG scheduler
 |   |   +-- DockerManager.ts            # Docker container lifecycle (dockerode)
 |   |   +-- GateEvaluator.ts            # Gate condition evaluation -> FSM events
-|   |   +-- LobsterWorkflowGenerator.ts # Generate .lobster with openclaw sessions spawn
+|   |   +-- LobsterWorkflowGenerator.ts # Generate .lobster with openclaw agent steps
 |   |   +-- NodeFSM.ts                  # 11-state node lifecycle FSM
 |   |   +-- OpenClawConfigSyncer.ts     # Generate openclaw.json from blueprints
 |   |   +-- PipelineFSM.ts              # 4-state pipeline lifecycle FSM

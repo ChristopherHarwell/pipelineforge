@@ -27,9 +27,9 @@ env:
 steps:
   - id: project-init
     run: >
-      openclaw sessions spawn
+      openclaw agent
       --agent project-init
-      --message
+      -m
       "$(cat ~/.claude/skills/project-init/SKILL.md)
       
       ## Feature
@@ -41,13 +41,13 @@ steps:
       ## Notes
       ${notes_dir}
       "
-      --gateway ${gateway_url}
+      --json
 
   - id: assign-tickets
     run: >
-      openclaw sessions spawn
+      openclaw agent
       --agent assign-tickets
-      --message
+      -m
       "$(cat ~/.claude/skills/assign-tickets/SKILL.md)
       
       ## Feature
@@ -62,14 +62,14 @@ steps:
       ## Prior Output
       $project-init.stdout
       "
-      --gateway ${gateway_url}
+      --json
     stdin: $project-init.json
 
   - id: implement-ticket
     run: >
-      openclaw sessions spawn
+      openclaw agent
       --agent implement-ticket
-      --message
+      -m
       "$(cat ~/.claude/skills/implement-ticket/SKILL.md)
       
       ## Feature
@@ -84,14 +84,14 @@ steps:
       ## Prior Output
       $assign-tickets.stdout
       "
-      --gateway ${gateway_url}
+      --json
     stdin: $assign-tickets.json
 
   - id: qa-review
     run: >
-      openclaw sessions spawn
+      openclaw agent
       --agent qa-review
-      --message
+      -m
       "$(cat ~/.claude/skills/qa-review/SKILL.md)
       
       ## Feature
@@ -106,14 +106,14 @@ steps:
       ## Prior Output
       $implement-ticket.stdout
       "
-      --gateway ${gateway_url}
+      --json
     stdin: $implement-ticket.json
 
   - id: type-review
     run: >
-      openclaw sessions spawn
+      openclaw agent
       --agent type-review
-      --message
+      -m
       "$(cat ~/.claude/skills/type-review/SKILL.md)
       
       ## Feature
@@ -128,14 +128,14 @@ steps:
       ## Prior Output
       $qa-review.stdout
       "
-      --gateway ${gateway_url}
+      --json
     stdin: $qa-review.json
 
   - id: security-review
     run: >
-      openclaw sessions spawn
+      openclaw agent
       --agent security-review
-      --message
+      -m
       "$(cat ~/.claude/skills/security-review/SKILL.md)
       
       ## Feature
@@ -150,14 +150,14 @@ steps:
       ## Prior Output
       $type-review.stdout
       "
-      --gateway ${gateway_url}
+      --json
     stdin: $type-review.json
 
   - id: staff-review
     run: >
-      openclaw sessions spawn
+      openclaw agent
       --agent staff-review
-      --message
+      -m
       "$(cat ~/.claude/skills/staff-review/SKILL.md)
       
       ## Feature
@@ -172,7 +172,7 @@ steps:
       ## Prior Output
       $security-review.stdout
       "
-      --gateway ${gateway_url}
+      --json
     stdin: $security-review.json
 
   - id: approve-staff-review
@@ -182,9 +182,9 @@ steps:
 
   - id: vp-review
     run: >
-      openclaw sessions spawn
+      openclaw agent
       --agent vp-review
-      --message
+      -m
       "$(cat ~/.claude/skills/vp-review/SKILL.md)
       
       ## Feature
@@ -199,7 +199,7 @@ steps:
       ## Prior Output
       $staff-review.stdout
       "
-      --gateway ${gateway_url}
+      --json
     stdin: $staff-review.json
     when: $approve-staff-review.approved
 

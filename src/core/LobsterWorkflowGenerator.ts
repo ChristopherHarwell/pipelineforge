@@ -8,7 +8,7 @@ import type { Blueprint } from "@pftypes/Blueprint.ts";
 // and pausing at approval gates.
 //
 // Each step invokes:
-//   openclaw sessions spawn --agent <name> --message "<prompt>" --gateway <url>
+//   openclaw agent --agent <name> -m "<prompt>" --json
 //
 // The agent config (model, tools, container sandbox) lives in
 // openclaw.json — NOT in the Lobster file. This keeps the workflow
@@ -141,9 +141,9 @@ export function generateLobsterWorkflow(
     const primaryDep: string | undefined = hasDeps ? bp.depends_on[0] : undefined;
 
     out.add(2, "run: >");
-    out.add(3, "openclaw sessions spawn");
+    out.add(3, "openclaw agent");
     out.add(3, `--agent ${bp.name}`);
-    out.add(3, "--message");
+    out.add(3, "-m");
     out.add(3, `"$(cat ${bp.skill_path})`);
     out.add(3, "");
     out.add(3, "## Feature");
@@ -163,7 +163,7 @@ export function generateLobsterWorkflow(
     }
 
     out.add(3, '"');
-    out.add(3, "--gateway ${gateway_url}");
+    out.add(3, "--json");
 
     // ── stdin pipe from dependency ──────────────────────────────
     if (primaryDep !== undefined) {

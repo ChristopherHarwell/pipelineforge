@@ -42,7 +42,7 @@ describe("generateLobsterWorkflow", () => {
   // ── basic generation ──────────────────────────────────────────────
 
   describe("— basic workflow generation", () => {
-    it("should generate a Lobster workflow with openclaw sessions spawn for each step", () => {
+    it("should generate a Lobster workflow with openclaw agent for each step", () => {
       const bpNameA: string = `step-${String(createStableTestId("a").value)}`;
       const bpNameB: string = `step-${String(createStableTestId("b").value)}`;
 
@@ -67,12 +67,12 @@ describe("generateLobsterWorkflow", () => {
       expect(output).toContain(`name: ${config.name}`);
       expect(output).toContain(`id: ${bpNameA}`);
       expect(output).toContain(`id: ${bpNameB}`);
-      expect(output).toContain("openclaw sessions spawn");
+      expect(output).toContain("openclaw agent");
       expect(output).toContain(`--agent ${bpNameA}`);
       expect(output).toContain(`--agent ${bpNameB}`);
     });
 
-    it("should reference the gateway URL variable in spawn commands", () => {
+    it("should include --json flag in agent commands", () => {
       const bpName: string = `step-${String(createStableTestId("gw").value)}`;
 
       const config: PipelineConfig = createTestPipelineConfig({
@@ -85,7 +85,7 @@ describe("generateLobsterWorkflow", () => {
 
       const output: string = generateLobsterWorkflow(config, blueprints);
 
-      expect(output).toContain("--gateway ${gateway_url}");
+      expect(output).toContain("--json");
     });
 
     it("should include skill content in the message via cat", () => {
@@ -256,7 +256,7 @@ describe("generateLobsterWorkflow", () => {
       const output: string = generateLobsterWorkflow(config, blueprints);
 
       expect(output).toContain(`id: ${bpName}`);
-      expect(output).toContain("openclaw sessions spawn");
+      expect(output).toContain("openclaw agent");
     });
 
     it("should skip blueprints not found in the map", () => {

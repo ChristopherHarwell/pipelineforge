@@ -138,7 +138,7 @@ lobster run --mode tool --file pipelines/full-sdlc.lobster \
   }'
 ```
 
-Each Lobster step invokes `openclaw sessions spawn --agent <name>` which reads agent config from `openclaw.json`, spawns a container, and returns output for piping to the next step.
+Each Lobster step invokes `openclaw agent --agent <name> -m "<prompt>" --json` which reads agent config from `openclaw.json`, spawns a container, and returns output for piping to the next step.
 
 Resume after an approval gate:
 
@@ -238,7 +238,7 @@ pipelineforge run --proxy
   DagExecutor walks the DAG:
        |
        +-- For each ready node:
-       |     ProxySessionManager calls: openclaw sessions spawn --agent <name>
+       |     ProxySessionManager calls: openclaw agent --agent <name> -m "<prompt>" --json
        |     Gateway reads openclaw.json -> spawns pipelineforge-claude container
        |     Container runs Claude Code with prompt + allowed tools
        |     Output is polled/streamed back

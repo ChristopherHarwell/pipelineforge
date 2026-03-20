@@ -10,6 +10,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createInterface } from "node:readline/promises";
 import type { DagGraph, DagNode } from "@pftypes/Graph.ts";
+import type { Blueprint } from "@pftypes/Blueprint.ts";
 import type {
   NodeState,
   PipelineState,
@@ -52,6 +53,7 @@ import type { DiscoveredSkill } from "@pftypes/SkillFrontmatter.ts";
 import type { OpenClawGatewayConfig } from "@pftypes/ProxySession.ts";
 import { BlueprintSyncer } from "@core/BlueprintSyncer.ts";
 import { OpenClawConfigSyncer } from "@core/OpenClawConfigSyncer.ts";
+import { OpenClawAgentRegistrar } from "@core/OpenClawAgentRegistrar.ts";
 import { generateLobsterWorkflow } from "@core/LobsterWorkflowGenerator.ts";
 import type { SyncReport, SyncEntry } from "@pftypes/SyncResult.ts";
 
@@ -267,6 +269,26 @@ program
       const configDir: string = resolve(opts.stateDir, pipelineId);
       await mkdir(configDir, { recursive: true });
       await writeFile(configPath, configGenerator.serialize(gatewayConfig));
+
+      // Register agents with OpenClaw CLI (deduplicate by blueprint name)
+      const registrar: OpenClawAgentRegistrar = new OpenClawAgentRegistrar(
+        logger,
+        notesDir,
+      );
+      const uniqueBlueprints: ReadonlySet<string> = new Set(
+        Array.from(graph.nodes.values()).map(
+          (node: DagNode): string => node.blueprint,
+        ),
+      );
+      const blueprintMap: ReadonlyMap<string, Blueprint> = new Map(
+        Array.from(uniqueBlueprints).map(
+          (bpName: string): [string, Blueprint] => [
+            bpName,
+            registry.get(bpName),
+          ],
+        ),
+      );
+      await registrar.registerAll(blueprintMap, Array.from(uniqueBlueprints));
 
       console.log(`  Backend:        proxy (OpenClaw gateway)`);
       console.log(`  Proxy image:    ${opts.proxyImage}`);
@@ -853,9 +875,6 @@ program
     );
     console.log("─".repeat(56));
 
-    const proxyPort: number = parseInt(opts.proxyPort, 10);
-    const gatewayUrl: string = `http://127.0.0.1:${String(proxyPort)}`;
-
     try {
       // ── Attach to running nodes via openclaw stream ─────────
       const streamProcesses: ChildProcess[] = [];
@@ -865,7 +884,7 @@ program
 
         const child: ChildProcess = (await import("node:child_process")).spawn(
           "openclaw",
-          ["sessions", "stream", "--agent", node.id, "--gateway", gatewayUrl],
+          ["agent", "--agent", node.id, "--json"],
         );
 
         streamProcesses.push(child);
@@ -889,14 +908,12 @@ program
         // Inject answer via openclaw CLI
         try {
           await execFileAsync("openclaw", [
-            "sessions",
-            "message",
-            "--agent",
+            "agent",
+            "--session-id",
             node.id,
-            "--message",
+            "-m",
             input.content,
-            "--gateway",
-            gatewayUrl,
+            "--json",
           ]);
           console.log(`  Answer sent to ${node.id} via ${input.source}`);
         } catch (err: unknown) {
@@ -1052,6 +1069,17 @@ program
       await configSyncer.writeConfig(gatewayConfig, outputPath);
       console.log(`  Written to: ${outputPath}`);
       console.log(`  Agents: ${String(gatewayConfig.agents.list.length)}`);
+
+      // Register agents with OpenClaw CLI
+      console.log("");
+      console.log("Registering agents with OpenClaw...");
+      const syncLogger: PipelineLogger = new ConsoleLogger();
+      const registrar: OpenClawAgentRegistrar = new OpenClawAgentRegistrar(
+        syncLogger,
+        notesDir,
+      );
+      await registrar.registerAll(registry.all(), pipelineConfig.blueprints);
+      console.log(`  ✓ ${String(pipelineConfig.blueprints.length)} agents registered`);
     }
 
     // ── Generate Lobster workflow ──────────────────────────────────
@@ -1248,6 +1276,15 @@ program
       await configSyncer.writeConfig(gatewayConfig, configPath);
       console.log(`  ✓ Config written to ${configPath}`);
       console.log(`  ✓ Agents: ${String(gatewayConfig.agents.list.length)}`);
+
+      // Register agents with OpenClaw CLI
+      console.log("  Registering agents with OpenClaw...");
+      const registrar: OpenClawAgentRegistrar = new OpenClawAgentRegistrar(
+        autoLogger,
+        notesDir,
+      );
+      await registrar.registerAll(registry.all(), pipelineConfig.blueprints);
+      console.log(`  ✓ ${String(pipelineConfig.blueprints.length)} agents registered with OpenClaw`);
 
       // Generate Lobster workflow
       console.log("  Generating Lobster workflow...");
