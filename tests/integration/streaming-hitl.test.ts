@@ -821,7 +821,26 @@ describe("Streaming Human-in-the-Loop — E2E", () => {
 
     it("should not re-prompt for the same question twice", async () => {
       const nodeId: string = `node-${String(createStableTestId("no-dupe").value)}`;
-      const cliChannel = createMockInputChannel("cli", "answer");
+
+      // First prompt during streaming gets "answer"; post-completion
+      // prompt gets "" (accept) to break the interaction loop.
+      let callCount: number = 0;
+      const promptCalls: string[] = [];
+      const cliChannel: InputChannel & { readonly promptCalls: string[] } = {
+        source: "cli" as const,
+        promptCalls,
+        prompt: vi.fn().mockImplementation(
+          async (question: string): Promise<UserInput> => {
+            promptCalls.push(question);
+            callCount++;
+            // First call: answer the streaming question
+            // Subsequent calls: accept (empty) to break post-completion loop
+            const content: string = callCount <= 1 ? "answer" : "";
+            return { source: "cli" as const, content, receivedAt: Date.now() };
+          },
+        ),
+        close: vi.fn(),
+      };
 
       const { executor, sentMessages } = createStreamingExecutorScenario({
         lines: [
@@ -847,7 +866,9 @@ describe("Streaming Human-in-the-Loop — E2E", () => {
 
       await executor.execute(graph, blueprintRegistry as never, state);
 
-      // Answer should only be sent once despite the question appearing twice
+      // Answer should only be sent once during streaming (the dupe is
+      // filtered by answeredQuestions). Post-completion prompt gets ""
+      // which is not sent as a follow-up.
       const postgresAnswers: number = sentMessages.filter(
         (m: string): boolean => m === "answer",
       ).length;
