@@ -433,85 +433,24 @@ export class DagExecutor {
     // ── Stream output to console ────────────────────────────────
     this.logger.streamContainerOutput(node.id, handle.outputStream);
 
-    // ── Line-by-line question detection on rolling window ───────
-    const ROLLING_WINDOW_SIZE: number = 20;
-    const rollingWindow: string[] = [];
-    const answeredQuestions: Set<string> = new Set();
-
-    const rl = createReadlineInterface({ input: handle.outputStream });
-
-    rl.on("line", async (line: string): VoidPromise => {
-      // OpenClaw `--json` wraps agent text inside JSON string values.
-      // Raw JSON lines like `"text": "What repo?\nWhich branch?"` won't
-      // match question patterns. Extract the string value if present
-      // and unescape JSON escapes (\n → newline) so the detector can
-      // see the actual question text.
-      const extractedLine: string = DagExecutor.extractJsonTextField(line);
-
-      rollingWindow.push(extractedLine);
-      if (rollingWindow.length > ROLLING_WINDOW_SIZE) {
-        rollingWindow.shift();
-      }
-
-      // Run question detection on rolling window
-      const windowText: string = rollingWindow.join("\n");
-      const detection: QuestionDetectionResult =
-        this.questionDetector.detect(windowText);
-
-      if (!detection.detected || this.inputRacer === null) {
-        return;
-      }
-
-      // Check for new (unanswered) questions
-      const newQuestions: ReadonlyArray<string> = detection.questions.filter(
-        (q: string): boolean => !answeredQuestions.has(q),
-      );
-
-      if (newQuestions.length === 0) {
-        return;
-      }
-
-      const questionText: string = newQuestions.join("\n");
-
-      // Mark questions as answered to prevent re-prompting
-      for (const q of newQuestions) {
-        answeredQuestions.add(q);
-      }
-
-      this.logger.nodeEvent(
-        "info",
-        this.toLogEvent(node),
-        `Agent question detected (confidence: ${String(detection.confidence)})`,
-      );
-
-      this.applyNodeEvent(fsm, "AGENT_QUESTION");
-
-      // Race CLI and Discord for the answer
-      const input: UserInput = await this.inputRacer.race(questionText);
-
-      // Inject answer into the session
-      await handle.sendMessage(input.content);
-
-      this.applyNodeEvent(fsm, "ANSWER_RECEIVED");
-
-      this.logger.nodeEvent(
-        "info",
-        this.toLogEvent(node),
-        `Answer received from ${input.source}: "${input.content.slice(0, 80)}"`,
-      );
-
-      // If answer came from CLI and Discord is available, notify Discord
-      if (input.source === "cli" && this.notificationRouter !== null) {
-        await this.notificationRouter.sendUpdate(
-          `Answer provided via CLI for ${node.id}: "${input.content.slice(0, 200)}"`,
-        );
-      }
-    });
+    // Ensure the stream is in flowing mode so the PassThrough drains
+    // and the "end" event fires. Without this, waitForCompletion()
+    // hangs if the logger doesn't attach a "data" listener (e.g.
+    // NoopLogger in tests). resume() puts the stream into flowing
+    // mode, discarding data not consumed by a listener.
+    handle.outputStream.resume();
 
     // ── Wait for session to complete ────────────────────────────
+    // OpenClaw `--json` returns a single JSON blob when done — the
+    // output stream carries raw JSON, not plain text. Mid-stream
+    // question detection was removed because:
+    //   1. Questions are inside JSON string values (invisible to
+    //      line-by-line regex matching)
+    //   2. The async rl.on("line") handler races with waitForCompletion(),
+    //      causing FSM state conflicts (AGENT_QUESTION fires but
+    //      ANSWER_RECEIVED never completes before gate evaluation)
+    // Instead, we prompt the user post-completion with the extracted text.
     let completion: StreamCompletionEvent = await handle.waitForCompletion();
-
-    rl.close();
 
     // ── Post-completion: show agent response and prompt user ────
     // Instead of trying to detect questions via pattern matching
