@@ -443,7 +443,14 @@ export class DagExecutor {
     const rl = createReadlineInterface({ input: handle.outputStream });
 
     rl.on("line", async (line: string): VoidPromise => {
-      rollingWindow.push(line);
+      // OpenClaw `--json` wraps agent text inside JSON string values.
+      // Raw JSON lines like `"text": "What repo?\nWhich branch?"` won't
+      // match question patterns. Extract the string value if present
+      // and unescape JSON escapes (\n → newline) so the detector can
+      // see the actual question text.
+      const extractedLine: string = DagExecutor.extractJsonTextField(line);
+
+      rollingWindow.push(extractedLine);
       if (rollingWindow.length > ROLLING_WINDOW_SIZE) {
         rollingWindow.shift();
       }
