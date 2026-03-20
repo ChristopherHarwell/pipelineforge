@@ -40,10 +40,10 @@ export class CliInputChannel implements InputChannel {
       const border: string = "═".repeat(BOX_WIDTH + 2);
 
       const formattedPrompt: string =
-        `\n  ╔═ Agent Question ${border.slice(18)}╗\n` +
+        `\n  ╔═ Agent Response ${border.slice(18)}╗\n` +
         `${bodyLines}\n` +
         `  ╚${border}╝\n` +
-        `  Your answer: `;
+        `  Reply (or Enter to accept): `;
 
       this.rl.question(formattedPrompt, (answer: string): void => {
         resolve({
