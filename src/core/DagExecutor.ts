@@ -515,66 +515,53 @@ export class DagExecutor {
 
     rl.close();
 
-    // ── Post-completion question detection on extracted text ─────
-    // The openclaw CLI returns JSON with agent text in
-    // result.payloads[].text — the line-by-line detector above
-    // can't see questions inside JSON strings. Extract and check.
+    // ── Post-completion: show agent response and prompt user ────
+    // Instead of trying to detect questions via pattern matching
+    // (fragile — misses parenthetical clarifications, implicit
+    // questions, etc.), always show the agent's extracted text and
+    // let the user decide whether to respond. Empty response = accept.
     let extractedText: string = this.extractAgentText(completion.fullOutput);
-    let questionLoop: number = 0;
-    const MAX_QUESTION_LOOPS: number = 5;
+    let interactionLoop: number = 0;
+    const MAX_INTERACTION_LOOPS: number = 5;
 
-    while (this.inputRacer !== null && questionLoop < MAX_QUESTION_LOOPS) {
-      const postDetection: QuestionDetectionResult =
-        this.questionDetector.detect(extractedText);
-
-      const postQuestions: ReadonlyArray<string> = postDetection.questions.filter(
-        (q: string): boolean => !answeredQuestions.has(q),
-      );
-
-      if (!postDetection.detected || postQuestions.length === 0) {
-        break;
-      }
-
-      const postQuestionText: string = postQuestions.join("\n");
-
-      for (const q of postQuestions) {
-        answeredQuestions.add(q);
-      }
-
+    while (this.inputRacer !== null && interactionLoop < MAX_INTERACTION_LOOPS) {
+      // Show the agent's response text to the user
       this.logger.nodeEvent(
         "info",
         this.toLogEvent(node),
-        `Agent question detected in response (confidence: ${String(postDetection.confidence)})`,
+        `Agent response:\n${extractedText}`,
       );
 
       this.applyNodeEvent(fsm, "AGENT_QUESTION");
 
-      // Prompt the user via CLI and/or Discord
-      const postInput: UserInput = await this.inputRacer.race(postQuestionText);
+      // Prompt user — empty response means "accept and continue"
+      const postInput: UserInput = await this.inputRacer.race(extractedText);
+
+      if (postInput.content.length === 0) {
+        this.applyNodeEvent(fsm, "ANSWER_RECEIVED");
+        break;
+      }
 
       this.applyNodeEvent(fsm, "ANSWER_RECEIVED");
 
       this.logger.nodeEvent(
         "info",
         this.toLogEvent(node),
-        `Answer received from ${postInput.source}: "${postInput.content.slice(0, 80)}"`,
+        `Reply from ${postInput.source}: "${postInput.content.slice(0, 80)}"`,
       );
 
       if (postInput.source === "cli" && this.notificationRouter !== null) {
         await this.notificationRouter.sendUpdate(
-          `Answer provided via CLI for ${node.id}: "${postInput.content.slice(0, 200)}"`,
+          `Reply via CLI for ${node.id}: "${postInput.content.slice(0, 200)}"`,
         );
       }
 
-      // Send follow-up and capture the response output directly —
-      // sendMessage now returns the subprocess stdout instead of void.
-      // The old code re-awaited handle.waitForCompletion() which
-      // returned the same resolved promise with stale data.
+      // Send follow-up and capture the new response
       const followUpOutput: string = await handle.sendMessage(postInput.content);
       extractedText = this.extractAgentText(followUpOutput);
       completion = { ...completion, fullOutput: followUpOutput };
 
-      questionLoop++;
+      interactionLoop++;
     }
 
     const result: ContainerResult = {
