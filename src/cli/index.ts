@@ -336,17 +336,6 @@ program
     let notificationRouter: NotificationRouter | null = null;
 
     if (opts.discord) {
-      const bearerToken: string | undefined =
-        opts.openclawToken ?? process.env["OPENCLAW_TOKEN"];
-
-      if (bearerToken === undefined || bearerToken.length === 0) {
-        console.error(
-          "Discord enabled but no bearer token provided. " +
-          "Use --openclaw-token or set OPENCLAW_TOKEN env var.",
-        );
-        process.exit(1);
-      }
-
       if (opts.discordChannel === undefined) {
         console.error(
           "Discord enabled but --discord-channel not provided.",
@@ -354,14 +343,7 @@ program
         process.exit(1);
       }
 
-      // When using proxy mode, point OpenClaw client at the proxy gateway
-      const openclawUrl: string = opts.proxy && proxyManager !== null
-        ? proxyManager.getGatewayUrl()
-        : opts.openclawUrl;
-
       const openclawConfig: OpenClawConfig = OpenClawConfigSchema.parse({
-        gateway_url: openclawUrl,
-        bearer_token: bearerToken,
         forum_channel_id: opts.discordChannel,
       });
 
@@ -1164,14 +1146,9 @@ program
 
       const enableDiscord: boolean = await promptYesNo(rl, "Enable Discord notifications?", false);
       let discordChannel: string | undefined;
-      let openclawToken: string | undefined;
 
       if (enableDiscord) {
         discordChannel = await promptRequired(rl, "Discord forum channel ID: ");
-        openclawToken = process.env["OPENCLAW_TOKEN"];
-        if (openclawToken === undefined || openclawToken.length === 0) {
-          openclawToken = await promptRequired(rl, "OpenClaw bearer token: ");
-        }
       }
 
       const skillDir: string = await promptWithDefault(
@@ -1381,10 +1358,10 @@ program
       let notificationRouter: NotificationRouter | null = null;
 
       if (enableDiscord && discordChannel !== undefined) {
-        const bearerToken: string = openclawToken ?? "";
+        // Ensure Discord channel is registered with OpenClaw
+        await registrar.ensureDiscordChannel();
+
         const openclawConfig: OpenClawConfig = OpenClawConfigSchema.parse({
-          gateway_url: proxyManager.getGatewayUrl(),
-          bearer_token: bearerToken,
           forum_channel_id: discordChannel,
         });
 
@@ -1603,8 +1580,6 @@ function buildExecutionBackend(
 interface DiscordOpts {
   readonly discord: boolean;
   readonly discordChannel: string | undefined;
-  readonly openclawUrl: string;
-  readonly openclawToken: string | undefined;
 }
 
 function buildNotificationRouter(
@@ -1616,17 +1591,6 @@ function buildNotificationRouter(
     return null;
   }
 
-  const bearerToken: string | undefined =
-    opts.openclawToken ?? process.env["OPENCLAW_TOKEN"];
-
-  if (bearerToken === undefined || bearerToken.length === 0) {
-    console.error(
-      "Discord enabled but no bearer token provided. " +
-      "Use --openclaw-token or set OPENCLAW_TOKEN env var.",
-    );
-    process.exit(1);
-  }
-
   if (opts.discordChannel === undefined) {
     console.error(
       "Discord enabled but --discord-channel not provided.",
@@ -1635,8 +1599,6 @@ function buildNotificationRouter(
   }
 
   const openclawConfig: OpenClawConfig = OpenClawConfigSchema.parse({
-    gateway_url: opts.openclawUrl,
-    bearer_token: bearerToken,
     forum_channel_id: opts.discordChannel,
   });
 
