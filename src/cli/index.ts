@@ -6,8 +6,7 @@ import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execFileAsync } from "@utils/process.ts";
 import { createInterface } from "node:readline/promises";
 import type { DagGraph, DagNode } from "@pftypes/Graph.ts";
 import type { Blueprint } from "@pftypes/Blueprint.ts";
@@ -57,7 +56,6 @@ import { OpenClawAgentRegistrar } from "@core/OpenClawAgentRegistrar.ts";
 import { generateLobsterWorkflow } from "@core/LobsterWorkflowGenerator.ts";
 import type { SyncReport, SyncEntry } from "@pftypes/SyncResult.ts";
 
-const execFileAsync: typeof execFile.__promisify__ = promisify(execFile);
 
 // ── Paths ───────────────────────────────────────────────────────────
 

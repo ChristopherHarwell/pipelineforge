@@ -1,6 +1,4 @@
 import type Docker from "dockerode";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { Readable } from "node:stream";
 import { PassThrough } from "node:stream";
 import type { Blueprint } from "@pftypes/Blueprint.ts";

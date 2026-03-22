@@ -1,33 +1,25 @@
-import { execFile } from "node:child_process";
 import { readdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { homedir } from "node:os";
-import { promisify } from "node:util";
 import type { Blueprint } from "@pftypes/Blueprint.ts";
 import type { PipelineLogger } from "@pftypes/Logger.ts";
+import { execFileAsync } from "@utils/process.ts";
+import { OPENCLAW_CLI, MODEL_MAP } from "@utils/openclaw-constants.ts";
+import { isJsonObject, getStringField, getNestedObject } from "@utils/json-guards.ts";
 
-const execFileAsync: typeof execFile.__promisify__ = promisify(execFile);
+// ── Docker Agent Config ──────────────────────────────────────────────
+// Configuration for running agents inside Docker containers.
+// PipelineForge manages containerization directly (via docker run)
+// rather than using OpenClaw's built-in sandbox, which restricts
+// filesystem access to sandbox-owned directories.
 
-// ── Constants ────────────────────────────────────────────────────────
-
-const OPENCLAW_CLI: string = "openclaw";
-
-// ── Model Mapping ────────────────────────────────────────────────────
-
-const MODEL_MAP: Readonly<Record<string, string>> = {
-  opus: "anthropic/claude-opus-4-6",
-  sonnet: "anthropic/claude-sonnet-4-6",
-  haiku: "anthropic/claude-haiku-4-5-20251001",
-} as const;
-
-// ── Sandbox Config ──────────────────────────────────────────────────
-// Docker sandbox settings applied to each registered agent.
-// OpenClaw's sandbox grants workspace access automatically and
-// inherits credentials via auth-profiles — no custom bind mounts needed.
-
-export interface AgentSandboxConfig {
+export interface DockerAgentConfig {
   readonly workerImage: string;
   readonly hostRepoDir: string;
+  readonly hostNotesDir: string;
+  readonly hostStateDir: string;
+  readonly hostClaudeDir: string;
+  readonly hostOpenClawDir: string;
 }
 
 // ── Registered Agent ─────────────────────────────────────────────────

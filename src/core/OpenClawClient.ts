@@ -1,5 +1,3 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { NotificationChannel } from "@pftypes/NotificationChannel.ts";
 import type {
   OpenClawConfig,
@@ -10,12 +8,10 @@ import type {
 } from "@pftypes/Discord.ts";
 import { toThreadId, toMessageId } from "@pftypes/Discord.ts";
 import type { PipelineLogger } from "@pftypes/Logger.ts";
-
-const execFileAsync: typeof execFile.__promisify__ = promisify(execFile);
-
-// ── Constants ────────────────────────────────────────────────────────
-
-const OPENCLAW_CLI: string = "openclaw";
+import { execFileAsync } from "@utils/process.ts";
+import { sleep } from "@utils/process.ts";
+import { OPENCLAW_CLI } from "@utils/openclaw-constants.ts";
+import { isJsonObject, getStringField, getNestedObject } from "@utils/json-guards.ts";
 
 // ── OpenClaw CLI Client ──────────────────────────────────────────────
 // Implements NotificationChannel using the `openclaw message` CLI

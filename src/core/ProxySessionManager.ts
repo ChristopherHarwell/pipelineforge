@@ -1,6 +1,5 @@
-import { execFile, spawn as spawnProcess } from "node:child_process";
+import { spawn as spawnProcess } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { promisify } from "node:util";
 import { PassThrough } from "node:stream";
 import type { SpawnOptions } from "@pftypes/ExecutionBackend.ts";
 import type { StreamingExecutionBackend, StreamingSessionHandle, StreamCompletionEvent } from "@pftypes/StreamingBackend.ts";
