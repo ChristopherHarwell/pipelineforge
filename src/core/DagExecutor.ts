@@ -855,24 +855,18 @@ export class DagExecutor {
     try {
       const parsed: unknown = JSON.parse(jsonOutput.trim());
 
-      // ES2022: Object.hasOwn() — safer than `in` operator because it
-      // doesn't walk the prototype chain. `"toString" in obj` is true
-      // for all objects; `Object.hasOwn(obj, "toString")` is not.
-      if (parsed !== null && typeof parsed === "object" && Object.hasOwn(parsed, "result")) {
-        const obj: Record<string, unknown> = parsed as Record<string, unknown>;
-        const result: unknown = obj["result"];
+      if (isJsonObject(parsed) && Object.hasOwn(parsed, "result")) {
+        const resultObj: Record<string, unknown> | undefined = getNestedObject(parsed, "result");
 
-        if (result !== null && typeof result === "object" && Object.hasOwn(result, "payloads")) {
-          const resultObj: Record<string, unknown> = result as Record<string, unknown>;
+        if (resultObj !== undefined && Object.hasOwn(resultObj, "payloads")) {
           const payloads: unknown = resultObj["payloads"];
 
           if (Array.isArray(payloads)) {
             const extracted: string = payloads
               .filter(
                 (p: unknown): boolean =>
-                  p !== null &&
-                  typeof p === "object" &&
-                  typeof (p as Record<string, unknown>)["text"] === "string",
+                  isJsonObject(p) &&
+                  typeof p["text"] === "string",
               )
               .map((p: unknown): string => (p as Record<string, unknown>)["text"] as string)
               .join("\n");
@@ -1078,12 +1072,8 @@ export class DagExecutor {
 
     try {
       const parsed: unknown = JSON.parse(cleaned.slice(jsonStart));
-      if (
-        parsed !== null &&
-        typeof parsed === "object" &&
-        "result" in parsed
-      ) {
-        const result: unknown = (parsed as Record<string, unknown>)["result"];
+      if (isJsonObject(parsed) && "result" in parsed) {
+        const result: unknown = parsed["result"];
         if (typeof result === "string") {
           return result;
         }

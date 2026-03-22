@@ -178,11 +178,11 @@ export class BlueprintSyncer {
     const doc: YamlDocument = parseDocument(rawContent);
     const root: unknown = doc.toJSON();
 
-    if (root === null || typeof root !== "object") {
+    if (!isJsonObject(root)) {
       throw new Error(`Invalid blueprint YAML in ${filePath}`);
     }
 
-    const existing: Record<string, unknown> = root as Record<string, unknown>;
+    const existing: Record<string, unknown> = root;
     const expectedSkillPath: string = `${skill.skillPath}/SKILL.md`;
 
     // Check if any derivable fields differ

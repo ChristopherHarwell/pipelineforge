@@ -193,8 +193,8 @@ export class OpenClawClient implements NotificationChannel {
     // Could be { messages: [...] } or a direct array
     const rawMessages: unknown = Array.isArray(parsed)
       ? parsed
-      : (parsed !== null && typeof parsed === "object" && "messages" in parsed)
-        ? (parsed as Record<string, unknown>)["messages"]
+      : (isJsonObject(parsed) && "messages" in parsed)
+        ? parsed["messages"]
         : null;
 
     if (!Array.isArray(rawMessages)) {
@@ -204,22 +204,20 @@ export class OpenClawClient implements NotificationChannel {
     const messages: ThreadMessage[] = [];
 
     for (const msg of rawMessages) {
-      if (msg === null || typeof msg !== "object") {
+      if (!isJsonObject(msg)) {
         continue;
       }
 
-      const obj: Record<string, unknown> = msg as Record<string, unknown>;
+      const id: string | undefined = getStringField(msg, "id") ?? getStringField(msg, "messageId");
+      const content: string | undefined = getStringField(msg, "content") ?? getStringField(msg, "text") ?? getStringField(msg, "body");
+      const timestamp: string | undefined = getStringField(msg, "timestamp") ?? getStringField(msg, "createdAt") ?? getStringField(msg, "date");
+      const isBot: unknown = msg["isBot"] ?? msg["bot"] ?? msg["fromBot"];
 
-      const id: unknown = obj["id"] ?? obj["messageId"];
-      const content: unknown = obj["content"] ?? obj["text"] ?? obj["body"];
-      const timestamp: unknown = obj["timestamp"] ?? obj["createdAt"] ?? obj["date"];
-      const isBot: unknown = obj["isBot"] ?? obj["bot"] ?? obj["fromBot"];
-
-      if (typeof id === "string" && typeof content === "string") {
+      if (id !== undefined && content !== undefined) {
         messages.push({
           id,
           content,
-          timestamp: typeof timestamp === "string" ? timestamp : new Date().toISOString(),
+          timestamp: timestamp ?? new Date().toISOString(),
           isBot: isBot === true,
         });
       }
@@ -242,24 +240,21 @@ export class OpenClawClient implements NotificationChannel {
 
     try {
       const parsed: unknown = JSON.parse(trimmed);
-      if (parsed !== null && typeof parsed === "object") {
-        const obj: Record<string, unknown> = parsed as Record<string, unknown>;
-
+      if (isJsonObject(parsed)) {
         for (const field of fields) {
-          if (typeof obj[field] === "string") {
-            return obj[field];
+          const val: string | undefined = getStringField(parsed, field);
+          if (val !== undefined) {
+            return val;
           }
         }
 
         // Check nested result object
-        if (
-          obj["result"] !== null &&
-          typeof obj["result"] === "object"
-        ) {
-          const result: Record<string, unknown> = obj["result"] as Record<string, unknown>;
+        const resultObj: Record<string, unknown> | undefined = getNestedObject(parsed, "result");
+        if (resultObj !== undefined) {
           for (const field of fields) {
-            if (typeof result[field] === "string") {
-              return result[field];
+            const val: string | undefined = getStringField(resultObj, field);
+            if (val !== undefined) {
+              return val;
             }
           }
         }
@@ -273,11 +268,6 @@ export class OpenClawClient implements NotificationChannel {
     );
   }
 
-  private sleep(ms: number): Promise<void> {
-    return new Promise<void>((resolve: () => void): void => {
-      setTimeout(resolve, ms);
-    });
-  }
 }
 
 // ── Internal Types ───────────────────────────────────────────────────

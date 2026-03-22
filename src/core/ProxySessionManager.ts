@@ -279,6 +279,7 @@ export class ProxySessionManager implements StreamingExecutionBackend {
       message,
       "--json",
     ]);
+    const { stdout } = await execFileAsync(cmd, [...cmdArgs]);
     return stdout;
   };
 
@@ -384,12 +385,11 @@ export class ProxySessionManager implements StreamingExecutionBackend {
     sessionId: SessionId,
     startTime: number,
   ): SessionCompletionResult | null {
-    if (record === null || typeof record !== "object" || !("status" in record)) {
+    if (!isJsonObject(record) || !("status" in record)) {
       return null;
     }
 
-    const obj: Record<string, unknown> = record as Record<string, unknown>;
-    const status: unknown = obj["status"];
+    const status: unknown = record["status"];
 
     if (status === "running" || status === "pending" || status === "active") {
       return null;
@@ -438,20 +438,18 @@ export class ProxySessionManager implements StreamingExecutionBackend {
     try {
       const parsed: unknown = JSON.parse(stdout.trim());
 
-      if (parsed === null || typeof parsed !== "object") {
+      if (!isJsonObject(parsed)) {
         return null;
       }
 
-      const obj: Record<string, unknown> = parsed as Record<string, unknown>;
-
       // OpenClaw completion shape: { status: "ok", result: { payloads: [...] } }
-      if (obj["status"] !== "ok" && obj["status"] !== "completed" && obj["status"] !== "done") {
+      if (parsed["status"] !== "ok" && parsed["status"] !== "completed" && parsed["status"] !== "done") {
         return null;
       }
 
       // Must have a result or payloads — distinguishes completion
       // from a session-creation response
-      if (!Object.hasOwn(obj, "result") && !Object.hasOwn(obj, "payloads")) {
+      if (!Object.hasOwn(parsed, "result") && !Object.hasOwn(parsed, "payloads")) {
         return null;
       }
 
@@ -487,44 +485,43 @@ export class ProxySessionManager implements StreamingExecutionBackend {
     // Try JSON parse first
     try {
       const parsed: unknown = JSON.parse(trimmed);
-      if (parsed !== null && typeof parsed === "object") {
-        const obj: Record<string, unknown> = parsed as Record<string, unknown>;
-
+      if (isJsonObject(parsed)) {
         // Direct sessionId field
-        if (typeof obj["sessionId"] === "string") {
-          return obj["sessionId"];
+        const sessionIdVal: string | undefined = getStringField(parsed, "sessionId");
+        if (sessionIdVal !== undefined) {
+          return sessionIdVal;
         }
 
         // Direct id field
-        if (typeof obj["id"] === "string") {
-          return obj["id"];
+        const idVal: string | undefined = getStringField(parsed, "id");
+        if (idVal !== undefined) {
+          return idVal;
         }
 
         // Nested session.id
-        if (
-          obj["session"] !== null &&
-          typeof obj["session"] === "object" &&
-          "id" in (obj["session"] as Record<string, unknown>)
-        ) {
-          const sessionObj: Record<string, unknown> = obj["session"] as Record<string, unknown>;
-          if (typeof sessionObj["id"] === "string") {
-            return sessionObj["id"];
+        const sessionObj: Record<string, unknown> | undefined = getNestedObject(parsed, "session");
+        if (sessionObj !== undefined) {
+          const nestedId: string | undefined = getStringField(sessionObj, "id");
+          if (nestedId !== undefined) {
+            return nestedId;
           }
         }
 
         // session_id field
-        if (typeof obj["session_id"] === "string") {
-          return obj["session_id"];
+        const sessionUnderscoreId: string | undefined = getStringField(parsed, "session_id");
+        if (sessionUnderscoreId !== undefined) {
+          return sessionUnderscoreId;
         }
 
         // runId field (OpenClaw completion response)
-        if (typeof obj["runId"] === "string") {
-          return obj["runId"];
+        const runId: string | undefined = getStringField(parsed, "runId");
+        if (runId !== undefined) {
+          return runId;
         }
 
         // Nested result.meta.agentMeta.sessionId (OpenClaw completion)
         const nestedSessionId: string | undefined =
-          ProxySessionManager.extractNestedSessionId(obj);
+          ProxySessionManager.extractNestedSessionId(parsed);
         if (nestedSessionId !== undefined) {
           return nestedSessionId;
         }
@@ -561,28 +558,22 @@ export class ProxySessionManager implements StreamingExecutionBackend {
   private static extractNestedSessionId(
     obj: Record<string, unknown>,
   ): string | undefined {
-    const result: unknown = obj["result"];
-    if (result === null || typeof result !== "object") {
+    const result: Record<string, unknown> | undefined = getNestedObject(obj, "result");
+    if (result === undefined) {
       return undefined;
     }
 
-    const meta: unknown = (result as Record<string, unknown>)["meta"];
-    if (meta === null || typeof meta !== "object") {
+    const meta: Record<string, unknown> | undefined = getNestedObject(result, "meta");
+    if (meta === undefined) {
       return undefined;
     }
 
-    const agentMeta: unknown = (meta as Record<string, unknown>)["agentMeta"];
-    if (agentMeta === null || typeof agentMeta !== "object") {
+    const agentMeta: Record<string, unknown> | undefined = getNestedObject(meta, "agentMeta");
+    if (agentMeta === undefined) {
       return undefined;
     }
 
-    const sessionId: unknown = (agentMeta as Record<string, unknown>)["sessionId"];
-    return typeof sessionId === "string" ? sessionId : undefined;
+    return getStringField(agentMeta, "sessionId");
   }
 
-  private sleep(ms: number): VoidPromise {
-    return new Promise<void>((resolve: () => void): void => {
-      setTimeout(resolve, ms);
-    });
-  }
 }

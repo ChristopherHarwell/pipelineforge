@@ -34,10 +34,8 @@ export class TemplateEngine {
   ): unknown {
     return path.split(".").reduce(
       (current: unknown, key: string): unknown =>
-        current !== null &&
-        current !== undefined &&
-        typeof current === "object"
-          ? (current as Record<string, unknown>)[key]
+        isJsonObject(current)
+          ? current[key]
           : undefined,
       obj as unknown,
     );

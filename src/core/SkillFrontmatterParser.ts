@@ -46,7 +46,7 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatter {
 
   // Handle comma-separated allowed-tools string → array
   const rawObj: Record<string, unknown> =
-    raw !== null && typeof raw === "object" ? { ...(raw as Record<string, unknown>) } : {};
+    isJsonObject(raw) ? { ...raw } : {};
 
   if (typeof rawObj["allowed-tools"] === "string") {
     rawObj["allowed-tools"] = (rawObj["allowed-tools"] as string)
