@@ -1,3 +1,5 @@
+import { isJsonObject } from "@utils/json-guards.ts";
+
 // ── Template Engine ─────────────────────────────────────────────────
 // Inspired by roundtable Chain CRD's Go template output injection.
 // Renders {{ .variable }} placeholders with nested path resolution.

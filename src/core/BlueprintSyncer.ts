@@ -3,6 +3,7 @@ import { join, extname } from "node:path";
 import { Document as YamlDocument, parseDocument } from "yaml";
 import type { DiscoveredSkill } from "@pftypes/SkillFrontmatter.ts";
 import type { SyncEntry, SyncOutcome, SyncReport } from "@pftypes/SyncResult.ts";
+import { isJsonObject } from "@utils/json-guards.ts";
 
 // ── Blueprint Syncer ────────────────────────────────────────────────
 // Merges derivable fields from SKILL.md frontmatter into blueprint
