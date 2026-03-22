@@ -53,6 +53,7 @@ import type { OpenClawGatewayConfig } from "@pftypes/ProxySession.ts";
 import { BlueprintSyncer } from "@core/BlueprintSyncer.ts";
 import { OpenClawConfigSyncer } from "@core/OpenClawConfigSyncer.ts";
 import { OpenClawAgentRegistrar } from "@core/OpenClawAgentRegistrar.ts";
+import type { DockerAgentConfig } from "@core/OpenClawAgentRegistrar.ts";
 import { generateLobsterWorkflow } from "@core/LobsterWorkflowGenerator.ts";
 import type { SyncReport, SyncEntry } from "@pftypes/SyncResult.ts";
 
@@ -282,7 +283,7 @@ program
           hostNotesDir: notesDir,
           hostStateDir: opts.stateDir,
           hostClaudeDir: DEFAULT_CLAUDE_DIR,
-          hostOpenClawDir: resolve(process.env["HOME"] ?? "/tmp", ".openclaw"),
+          hostOpenClawDir: DEFAULT_OPENCLAW_DIR,
         },
       );
       const uniqueBlueprints: ReadonlySet<string> = new Set(
@@ -326,7 +327,7 @@ program
       executionBackend = new ProxySessionManager(
         proxyManager.getGatewayUrl(),
         logger,
-        DEFAULT_POLL_INTERVAL_MS,
+        undefined,
         registrar.getDockerConfig() ?? undefined,
       );
     } else {
@@ -502,12 +503,22 @@ program
     // ── Rebuild executor ────────────────────────────────────────
     const resumeLogger: PipelineLogger = new ConsoleLogger();
 
+    const resumeDockerConfig: DockerAgentConfig = {
+      workerImage: opts.image,
+      hostRepoDir: state.repo_dir,
+      hostNotesDir: state.notes_dir,
+      hostStateDir: opts.stateDir,
+      hostClaudeDir: DEFAULT_CLAUDE_DIR,
+      hostOpenClawDir: DEFAULT_OPENCLAW_DIR,
+    };
+
     const resumeBackend: ExecutionBackend = buildExecutionBackend(
       opts,
       opts.id,
       state.repo_dir,
       state.notes_dir,
       resumeLogger,
+      resumeDockerConfig,
     );
 
     // ── Notification Channel ─────────────────────────────────
@@ -651,12 +662,22 @@ program
     // ── Rebuild executor ────────────────────────────────────────
     const retryLogger: PipelineLogger = new ConsoleLogger();
 
+    const retryDockerConfig: DockerAgentConfig = {
+      workerImage: opts.image,
+      hostRepoDir: resetState.repo_dir,
+      hostNotesDir: resetState.notes_dir,
+      hostStateDir: opts.stateDir,
+      hostClaudeDir: DEFAULT_CLAUDE_DIR,
+      hostOpenClawDir: DEFAULT_OPENCLAW_DIR,
+    };
+
     const retryBackend: ExecutionBackend = buildExecutionBackend(
       opts,
       opts.id,
       resetState.repo_dir,
       resetState.notes_dir,
       retryLogger,
+      retryDockerConfig,
     );
 
     // ── Notification Channel ─────────────────────────────────
@@ -1380,6 +1401,8 @@ program
       const executionBackend: ExecutionBackend = new ProxySessionManager(
         proxyManager.getGatewayUrl(),
         logger,
+        undefined,
+        registrar.getDockerConfig() ?? undefined,
       );
 
       // ── Notification channel ───────────────────────────────────
@@ -1585,11 +1608,12 @@ function buildExecutionBackend(
   repoDir: string,
   notesDir: string,
   logger: PipelineLogger,
+  dockerConfig?: DockerAgentConfig,
 ): ExecutionBackend {
   if (opts.proxy) {
     const proxyPort: number = parseInt(opts.proxyPort, 10);
     const gatewayUrl: string = `http://127.0.0.1:${String(proxyPort)}`;
-    return new ProxySessionManager(gatewayUrl, logger);
+    return new ProxySessionManager(gatewayUrl, logger, undefined, dockerConfig);
   }
 
   return new DockerManager({
