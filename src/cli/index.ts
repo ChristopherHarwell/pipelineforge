@@ -82,6 +82,10 @@ const DEFAULT_CLAUDE_JSON_PATH: string = resolve(
   process.env["HOME"] ?? "/tmp",
   ".claude.json",
 );
+const DEFAULT_OPENCLAW_DIR: string = resolve(
+  process.env["HOME"] ?? "/tmp",
+  ".openclaw",
+);
 const DEFAULT_IMAGE_NAME: string = "pipelineforge-claude";
 const DEFAULT_GATEWAY_IMAGE_NAME: string = "pipelineforge-gateway";
 const DOCKER_DIR: string = resolve(PIPELINEFORGE_ROOT, "docker");
@@ -275,6 +279,10 @@ program
         {
           workerImage: opts.image,
           hostRepoDir: repoDir,
+          hostNotesDir: notesDir,
+          hostStateDir: opts.stateDir,
+          hostClaudeDir: DEFAULT_CLAUDE_DIR,
+          hostOpenClawDir: resolve(process.env["HOME"] ?? "/tmp", ".openclaw"),
         },
       );
       const uniqueBlueprints: ReadonlySet<string> = new Set(
@@ -318,6 +326,8 @@ program
       executionBackend = new ProxySessionManager(
         proxyManager.getGatewayUrl(),
         logger,
+        DEFAULT_POLL_INTERVAL_MS,
+        registrar.getDockerConfig() ?? undefined,
       );
     } else {
       // ── Path A: Direct Docker containers ────────────────────
@@ -1064,6 +1074,10 @@ program
         {
           workerImage: opts.image,
           hostRepoDir: repoDir,
+          hostNotesDir: notesDir,
+          hostStateDir: opts.stateDir,
+          hostClaudeDir: DEFAULT_CLAUDE_DIR,
+          hostOpenClawDir: DEFAULT_OPENCLAW_DIR,
         },
       );
       await registrar.registerAll(registry.all(), pipelineConfig.blueprints);
@@ -1268,6 +1282,10 @@ program
         {
           workerImage: DEFAULT_IMAGE_NAME,
           hostRepoDir: repoDir,
+          hostNotesDir: notesDir,
+          hostStateDir: opts.stateDir,
+          hostClaudeDir: DEFAULT_CLAUDE_DIR,
+          hostOpenClawDir: DEFAULT_OPENCLAW_DIR,
         },
       );
       await registrar.registerAll(registry.all(), pipelineConfig.blueprints);
