@@ -21,14 +21,13 @@ const MODEL_MAP: Readonly<Record<string, string>> = {
 } as const;
 
 // ── Sandbox Config ──────────────────────────────────────────────────
-// Host-absolute paths needed to build Docker bind mounts for each agent.
+// Docker sandbox settings applied to each registered agent.
+// OpenClaw's sandbox grants workspace access automatically and
+// inherits credentials via auth-profiles — no custom bind mounts needed.
 
 export interface AgentSandboxConfig {
   readonly workerImage: string;
   readonly hostRepoDir: string;
-  readonly hostNotesDir: string;
-  readonly hostStateDir: string;
-  readonly hostClaudeDir: string;
 }
 
 // ── Registered Agent ─────────────────────────────────────────────────
@@ -255,7 +254,14 @@ export class OpenClawAgentRegistrar {
    */
   private async addAgent(bp: Blueprint): Promise<RegisteredAgent> {
     const model: string = MODEL_MAP[bp.execution.model] ?? bp.execution.model;
-    const workspace: string = this.workspaceBase;
+
+    // Repo-requiring agents get the repo dir as workspace;
+    // all others get the notes dir. OpenClaw's sandbox grants
+    // access to the workspace root automatically.
+    const workspace: string =
+      bp.requires_repo && this.sandbox !== null
+        ? this.sandbox.hostRepoDir
+        : this.workspaceBase;
 
     const args: string[] = [
       "agents",
@@ -325,38 +331,15 @@ export class OpenClawAgentRegistrar {
   }
 
   /**
-   * Build Docker bind mounts for a blueprint, mirroring the mount
-   * strategy from OpenClawConfigSyncer.blueprintToAgent.
-   *
-   * @param bp - Blueprint to build mounts for
-   * @returns Array of "host:container:mode" bind strings
-   */
-  private buildBindMounts(bp: Blueprint): ReadonlyArray<string> {
-    if (this.sandbox === null) {
-      return [];
-    }
-
-    const binds: string[] = [
-      `${this.sandbox.hostClaudeDir}:/home/claude/.claude:ro`,
-      `${this.sandbox.hostNotesDir}:/notes:rw`,
-      `${this.sandbox.hostStateDir}:/state:ro`,
-    ];
-
-    if (bp.requires_repo) {
-      binds.push(`${this.sandbox.hostRepoDir}:/workspace:rw`);
-    }
-
-    if (bp.docker?.extra_mounts !== undefined) {
-      binds.push(...bp.docker.extra_mounts);
-    }
-
-    return binds;
-  }
-
-  /**
    * Apply Docker sandbox configuration to a registered agent via
-   * `openclaw config set`. Sets sandbox.mode, docker.image, and
-   * docker.binds on the agent entry in ~/.openclaw/openclaw.json.
+   * `openclaw config set`. Sets sandbox.mode and docker.image on
+   * the agent entry in ~/.openclaw/openclaw.json.
+   *
+   * OpenClaw's sandbox automatically grants access to the agent's
+   * workspace root and sandbox directory. Credentials are inherited
+   * via auth-profiles from the main agent — no custom bind mounts
+   * are needed (and would be rejected by sandbox security if the
+   * source is outside allowed roots).
    *
    * @param bp - Blueprint whose agent should be sandboxed
    * @returns true if sandbox config was applied successfully
@@ -376,7 +359,6 @@ export class OpenClawAgentRegistrar {
     }
 
     const prefix: string = `agents.list.${String(idx)}`;
-    const binds: ReadonlyArray<string> = this.buildBindMounts(bp);
 
     try {
       // Set sandbox mode to "all" — sandbox every command the agent runs
@@ -384,16 +366,10 @@ export class OpenClawAgentRegistrar {
         "config", "set", `${prefix}.sandbox.mode`, '"all"',
       ]);
 
-      // Set Docker image
+      // Set Docker image for the sandbox container
       await execFileAsync(OPENCLAW_CLI, [
         "config", "set", `${prefix}.sandbox.docker.image`,
         JSON.stringify(this.sandbox.workerImage),
-      ]);
-
-      // Set Docker bind mounts
-      await execFileAsync(OPENCLAW_CLI, [
-        "config", "set", `${prefix}.sandbox.docker.binds`,
-        JSON.stringify(binds),
       ]);
 
       return true;
@@ -408,7 +384,9 @@ export class OpenClawAgentRegistrar {
   }
 
   /**
-   * Delete an OpenClaw agent by ID.
+   * Delete an OpenClaw agent by ID and clear its stale sessions.
+   * Session files from previous runs can hold locks that block
+   * new agent invocations, so we remove them on re-registration.
    *
    * @param agentId - Agent to delete
    */
@@ -423,6 +401,45 @@ export class OpenClawAgentRegistrar {
       ]);
     } catch {
       // Agent may already be removed
+    }
+
+    await this.clearStaleSessions(agentId);
+  }
+
+  /**
+   * Remove stale session files for an agent. OpenClaw stores sessions
+   * at `~/.openclaw/agents/<id>/sessions/`. Lock files from crashed or
+   * previous gateway processes block new agent invocations with
+   * "session file locked" errors.
+   *
+   * @param agentId - Agent whose sessions to clear
+   */
+  private async clearStaleSessions(agentId: string): Promise<void> {
+    const sessionsDir: string = resolve(
+      homedir(),
+      ".openclaw",
+      "agents",
+      agentId,
+      "sessions",
+    );
+
+    try {
+      const entries: ReadonlyArray<string> = await readdir(sessionsDir);
+
+      for (const entry of entries) {
+        try {
+          await rm(resolve(sessionsDir, entry), { force: true });
+        } catch {
+          // File may already be removed or still locked
+        }
+      }
+
+      this.logger.pipelineEvent(
+        "info",
+        `Cleared ${String(entries.length)} stale session file(s) for ${agentId}`,
+      );
+    } catch {
+      // Sessions directory may not exist yet — that's fine
     }
   }
 }

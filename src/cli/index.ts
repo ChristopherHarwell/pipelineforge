@@ -277,9 +277,6 @@ program
         {
           workerImage: opts.image,
           hostRepoDir: repoDir,
-          hostNotesDir: notesDir,
-          hostStateDir: opts.stateDir,
-          hostClaudeDir: DEFAULT_CLAUDE_DIR,
         },
       );
       const uniqueBlueprints: ReadonlySet<string> = new Set(
@@ -1069,9 +1066,6 @@ program
         {
           workerImage: opts.image,
           hostRepoDir: repoDir,
-          hostNotesDir: notesDir,
-          hostStateDir: opts.stateDir,
-          hostClaudeDir: DEFAULT_CLAUDE_DIR,
         },
       );
       await registrar.registerAll(registry.all(), pipelineConfig.blueprints);
@@ -1276,9 +1270,6 @@ program
         {
           workerImage: DEFAULT_IMAGE_NAME,
           hostRepoDir: repoDir,
-          hostNotesDir: notesDir,
-          hostStateDir: opts.stateDir,
-          hostClaudeDir: DEFAULT_CLAUDE_DIR,
         },
       );
       await registrar.registerAll(registry.all(), pipelineConfig.blueprints);

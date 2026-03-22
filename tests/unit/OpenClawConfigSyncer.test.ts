@@ -134,7 +134,7 @@ describe("OpenClawConfigSyncer", () => {
         [bpName],
       );
 
-      expect(result.agents.list[0]!.model).toBe("claude-opus-4-6");
+      expect(result.agents.list[0]!.model).toBe("anthropic/claude-opus-4-6");
     });
 
     it("should include allowed_tools from blueprint execution config", () => {
