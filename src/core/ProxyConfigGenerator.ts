@@ -10,9 +10,9 @@ import type { BlueprintRegistry } from "@core/BlueprintRegistry.ts";
 // Maps PipelineForge model names to OpenClaw/Anthropic model identifiers.
 
 const MODEL_MAP: Readonly<Record<string, string>> = {
-  opus: "claude-opus-4-6",
-  sonnet: "claude-sonnet-4-6",
-  haiku: "claude-haiku-4-5-20251001",
+  opus: "anthropic/claude-opus-4-6",
+  sonnet: "anthropic/claude-sonnet-4-6",
+  haiku: "anthropic/claude-haiku-4-5-20251001",
 };
 
 // ── Proxy Config Generator ──────────────────────────────────────────

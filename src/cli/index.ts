@@ -274,6 +274,13 @@ program
       const registrar: OpenClawAgentRegistrar = new OpenClawAgentRegistrar(
         logger,
         notesDir,
+        {
+          workerImage: opts.image,
+          hostRepoDir: repoDir,
+          hostNotesDir: notesDir,
+          hostStateDir: opts.stateDir,
+          hostClaudeDir: DEFAULT_CLAUDE_DIR,
+        },
       );
       const uniqueBlueprints: ReadonlySet<string> = new Set(
         Array.from(graph.nodes.values()).map(
@@ -1059,6 +1066,13 @@ program
       const registrar: OpenClawAgentRegistrar = new OpenClawAgentRegistrar(
         syncLogger,
         notesDir,
+        {
+          workerImage: opts.image,
+          hostRepoDir: repoDir,
+          hostNotesDir: notesDir,
+          hostStateDir: opts.stateDir,
+          hostClaudeDir: DEFAULT_CLAUDE_DIR,
+        },
       );
       await registrar.registerAll(registry.all(), pipelineConfig.blueprints);
       console.log(`  ✓ ${String(pipelineConfig.blueprints.length)} agents registered`);
@@ -1259,6 +1273,13 @@ program
       const registrar: OpenClawAgentRegistrar = new OpenClawAgentRegistrar(
         autoLogger,
         notesDir,
+        {
+          workerImage: DEFAULT_IMAGE_NAME,
+          hostRepoDir: repoDir,
+          hostNotesDir: notesDir,
+          hostStateDir: opts.stateDir,
+          hostClaudeDir: DEFAULT_CLAUDE_DIR,
+        },
       );
       await registrar.registerAll(registry.all(), pipelineConfig.blueprints);
       console.log(`  ✓ ${String(pipelineConfig.blueprints.length)} agents registered with OpenClaw`);
