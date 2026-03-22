@@ -160,7 +160,7 @@ export class ProxyContainerManager {
         // Gateway not ready yet
       }
 
-      await this.sleep(HEALTH_CHECK_INTERVAL_MS);
+      await sleep(HEALTH_CHECK_INTERVAL_MS);
     }
 
     throw new Error(
@@ -168,9 +168,4 @@ export class ProxyContainerManager {
     );
   }
 
-  private sleep(ms: number): Promise<void> {
-    return new Promise<void>((resolve: () => void): void => {
-      setTimeout(resolve, ms);
-    });
-  }
 }

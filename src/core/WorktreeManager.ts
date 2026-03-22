@@ -1,8 +1,5 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { join } from "node:path";
-
-const execFileAsync: typeof execFile.__promisify__ = promisify(execFile);
+import { execFileAsync } from "@utils/process.ts";
 
 // ── Worktree Config ─────────────────────────────────────────────────
 

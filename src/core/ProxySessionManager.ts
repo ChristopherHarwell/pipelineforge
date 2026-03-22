@@ -36,11 +36,77 @@ export class ProxySessionManager implements StreamingExecutionBackend {
     _gatewayUrl: string,
     logger: PipelineLogger,
     pollIntervalMs: number = DEFAULT_POLL_INTERVAL_MS,
+    dockerConfig?: DockerAgentConfig,
   ) {
-    // gatewayUrl is accepted for API compatibility but not used —
-    // the openclaw CLI reads gateway config from ~/.openclaw/openclaw.json
     this.logger = logger;
     this.pollIntervalMs = pollIntervalMs;
+    this.dockerConfig = dockerConfig ?? null;
+  }
+
+  // ── Docker Wrapping ────────────────────────────────────────────────
+  // When dockerConfig is set, wrap openclaw CLI calls inside
+  // `docker run --rm` with volume mounts for workspace, notes,
+  // state, credentials, and openclaw config.
+
+  /**
+   * Build `docker run` prefix args for running openclaw inside a
+   * container. The container gets:
+   *   - ~/.openclaw mounted for agent config/sessions
+   *   - ~/.claude mounted for Claude credentials
+   *   - notes dir mounted at /notes
+   *   - state dir mounted at /state
+   *   - repo dir mounted at /workspace (if configured)
+   *   - Claude auth env vars forwarded
+   *
+   * @returns [command, ...prefixArgs] to prepend before openclaw args,
+   *   or [OPENCLAW_CLI] if no docker config
+   */
+  private buildCommandPrefix(): ReadonlyArray<string> {
+    if (this.dockerConfig === null) {
+      return [OPENCLAW_CLI];
+    }
+
+    const dc: DockerAgentConfig = this.dockerConfig;
+
+    const args: string[] = [
+      "docker", "run", "--rm",
+      // Mount OpenClaw config + agent state
+      "-v", `${dc.hostOpenClawDir}:/root/.openclaw:rw`,
+      // Mount Claude credentials
+      "-v", `${dc.hostClaudeDir}:/root/.claude:ro`,
+      // Mount workspace directories
+      "-v", `${dc.hostNotesDir}:/notes:rw`,
+      "-v", `${dc.hostStateDir}:/state:ro`,
+      "-v", `${dc.hostRepoDir}:/workspace:rw`,
+      // Working directory
+      "-w", "/notes",
+    ];
+
+    // Forward Claude authentication env vars
+    const authEnv: ReadonlyArray<string> = collectClaudeAuthEnv();
+    for (const envEntry of authEnv) {
+      args.push("-e", envEntry);
+    }
+
+    // Image and command
+    args.push(dc.workerImage, OPENCLAW_CLI);
+
+    return args;
+  }
+
+  /**
+   * Build the full command + args for an openclaw agent invocation.
+   * When docker is configured, returns ["docker", "run", ..., "openclaw", ...openclawArgs].
+   * Otherwise returns ["openclaw", ...openclawArgs].
+   *
+   * @param openclawArgs - Arguments to pass to the openclaw CLI
+   * @returns Tuple of [command, args]
+   */
+  private buildCommand(openclawArgs: ReadonlyArray<string>): readonly [string, ReadonlyArray<string>] {
+    const prefix: ReadonlyArray<string> = this.buildCommandPrefix();
+    const command: string = prefix[0]!;
+    const args: ReadonlyArray<string> = [...prefix.slice(1), ...openclawArgs];
+    return [command, args] as const;
   }
 
   // ── ExecutionBackend Implementation ─────────────────────────────
@@ -177,10 +243,11 @@ export class ProxySessionManager implements StreamingExecutionBackend {
     );
 
     // Spawn agent as a long-lived subprocess for real-time output
+    // When docker is configured, wraps in `docker run` with mounts
     const outputStream: PassThrough = new PassThrough();
     const outputChunks: Buffer[] = [];
 
-    const child: ChildProcess = spawnProcess(OPENCLAW_CLI, [
+    const [cmd, cmdArgs] = this.buildCommand([
       "agent",
       "--agent",
       agentName,
@@ -188,6 +255,7 @@ export class ProxySessionManager implements StreamingExecutionBackend {
       prompt,
       "--json",
     ]);
+    const child: ChildProcess = spawnProcess(cmd, [...cmdArgs]);
 
     this.activeProcesses.set(node.id, child);
 
@@ -269,7 +337,7 @@ export class ProxySessionManager implements StreamingExecutionBackend {
     sessionId: SessionId,
     message: string,
   ): Promise<string> => {
-    const { stdout } = await execFileAsync(OPENCLAW_CLI, [
+    const [cmd, cmdArgs] = this.buildCommand([
       "agent",
       "--session-id",
       sessionId,
@@ -310,7 +378,7 @@ export class ProxySessionManager implements StreamingExecutionBackend {
         return result;
       }
 
-      await this.sleep(this.pollIntervalMs);
+      await sleep(this.pollIntervalMs);
     }
 
     throw new Error(
@@ -388,13 +456,10 @@ export class ProxySessionManager implements StreamingExecutionBackend {
 
     // Extract output from the session transcript
     const output: string =
-      typeof obj["output"] === "string"
-        ? obj["output"]
-        : typeof obj["transcript"] === "string"
-          ? obj["transcript"]
-          : typeof obj["result"] === "string"
-            ? obj["result"]
-            : JSON.stringify(obj);
+      getStringField(record, "output")
+        ?? getStringField(record, "transcript")
+        ?? getStringField(record, "result")
+        ?? JSON.stringify(record);
 
     const exitCode: number =
       status === "completed" || status === "done" ? 0 : 1;

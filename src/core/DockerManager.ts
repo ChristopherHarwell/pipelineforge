@@ -6,8 +6,8 @@ import type { DagNode } from "@pftypes/Graph.ts";
 import type { ContainerResult } from "@pftypes/Pipeline.ts";
 import type { PipelineLogger } from "@pftypes/Logger.ts";
 import type { ExecutionBackend, SpawnOptions } from "@pftypes/ExecutionBackend.ts";
-
-const execFileAsync: typeof execFile.__promisify__ = promisify(execFile);
+import { execFileAsync } from "@utils/process.ts";
+import { collectClaudeAuthEnv } from "@utils/openclaw-constants.ts";
 
 // ── Docker Config ───────────────────────────────────────────────────
 
