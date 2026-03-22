@@ -124,44 +124,13 @@ export class OpenClawConfigSyncer {
   // ── Private Helpers ─────────────────────────────────────────────
 
   private blueprintToAgent(bp: Blueprint): OpenClawAgentConfig {
-    const model: string =
-      MODEL_MAP[bp.execution.model] ?? bp.execution.model;
-
-    const mounts: string[] = [
-      `${this.config.hostClaudeDir}:/home/claude/.claude:ro`,
-      `${this.config.hostNotesDir}:/notes:rw`,
-      `${this.config.hostStateDir}:/state:ro`,
-    ];
-
-    let workingDir: string = "/notes";
-
-    if (bp.requires_repo) {
-      mounts.push(`${this.config.hostRepoDir}:/workspace:rw`);
-      workingDir = "/workspace";
-    }
-
-    if (bp.docker?.extra_mounts !== undefined) {
-      mounts.push(...bp.docker.extra_mounts);
-    }
-
-    const agentConfig: OpenClawAgentConfig = {
-      name: bp.name,
-      model,
-      instructions: bp.execution.prompt_template,
-      tools: [...bp.execution.allowed_tools],
-      ...(bp.review_mode.enabled
-        ? { disallowedTools: [...bp.review_mode.dry_run_disallowed_tools] }
-        : {}),
-      maxTurns: bp.execution.max_turns,
-      sandbox: {
-        docker: {
-          image: this.config.workerImage,
-          mounts,
-          workingDir,
-        },
-      },
+    const dirs: WorkspaceDirs = {
+      hostClaudeDir: this.config.hostClaudeDir,
+      hostNotesDir: this.config.hostNotesDir,
+      hostStateDir: this.config.hostStateDir,
+      hostRepoDir: this.config.hostRepoDir,
     };
 
-    return agentConfig;
+    return blueprintToAgentConfig(bp.name, bp, this.config.workerImage, dirs);
   }
 }

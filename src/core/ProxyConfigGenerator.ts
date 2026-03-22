@@ -90,44 +90,14 @@ export class ProxyConfigGenerator {
    * @returns OpenClaw agent configuration
    */
   nodeToAgent(node: DagNode, blueprint: Blueprint): OpenClawAgentConfig {
-    const model: string = MODEL_MAP[blueprint.execution.model] ?? blueprint.execution.model;
-
-    const mounts: string[] = [
-      `${this.hostClaudeDir}:/home/claude/.claude:ro`,
-      `${this.hostNotesDir}:/notes:rw`,
-      `${this.hostStateDir}:/state:ro`,
-    ];
-
-    let workingDir: string = "/notes";
-
-    if (blueprint.requires_repo) {
-      mounts.push(`${this.hostRepoDir}:/workspace:rw`);
-      workingDir = "/workspace";
-    }
-
-    if (blueprint.docker?.extra_mounts !== undefined) {
-      mounts.push(...blueprint.docker.extra_mounts);
-    }
-
-    const agentConfig: OpenClawAgentConfig = {
-      name: node.id,
-      model,
-      instructions: blueprint.execution.prompt_template,
-      tools: [...blueprint.execution.allowed_tools],
-      ...(blueprint.review_mode.enabled
-        ? { disallowedTools: [...blueprint.review_mode.dry_run_disallowed_tools] }
-        : {}),
-      maxTurns: blueprint.execution.max_turns,
-      sandbox: {
-        docker: {
-          image: this.workerImage,
-          mounts,
-          workingDir,
-        },
-      },
+    const dirs: WorkspaceDirs = {
+      hostClaudeDir: this.hostClaudeDir,
+      hostNotesDir: this.hostNotesDir,
+      hostStateDir: this.hostStateDir,
+      hostRepoDir: this.hostRepoDir,
     };
 
-    return agentConfig;
+    return blueprintToAgentConfig(node.id, blueprint, this.workerImage, dirs);
   }
 
   /**
