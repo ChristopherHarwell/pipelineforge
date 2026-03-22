@@ -7,6 +7,7 @@ import {
   type SkillFrontmatter,
   type DiscoveredSkill,
 } from "@pftypes/SkillFrontmatter.ts";
+import { isJsonObject } from "@utils/json-guards.ts";
 
 // ── Frontmatter Extraction ──────────────────────────────────────────
 

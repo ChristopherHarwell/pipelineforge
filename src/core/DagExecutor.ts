@@ -1,4 +1,5 @@
 import type { Blueprint } from "@pftypes/Blueprint.ts";
+import { isJsonObject, getNestedObject } from "@utils/json-guards.ts";
 import type { DagGraph, DagNode } from "@pftypes/Graph.ts";
 import type {
   ContainerResult,

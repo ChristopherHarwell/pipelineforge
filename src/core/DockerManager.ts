@@ -214,20 +214,7 @@ export class DockerManager implements ExecutionBackend {
     // Forward Claude Code authentication from host environment.
     // Priority: CLAUDE_CODE_USE_BEDROCK/CLAUDE_CODE_USE_VERTEX auth tokens
     // (set by `claude setup-token`) take precedence over ANTHROPIC_API_KEY.
-    const CLAUDE_AUTH_VARS: ReadonlyArray<string> = [
-      "ANTHROPIC_API_KEY",
-      "CLAUDE_CODE_USE_BEDROCK",
-      "CLAUDE_CODE_USE_VERTEX",
-      "ANTHROPIC_AUTH_TOKEN",
-      "CLAUDE_API_KEY",
-    ];
-
-    for (const varName of CLAUDE_AUTH_VARS) {
-      const value: string | undefined = process.env[varName];
-      if (value !== undefined) {
-        env.push(`${varName}=${value}`);
-      }
-    }
+    env.push(...collectClaudeAuthEnv());
 
     if (blueprint.docker?.env !== undefined) {
       for (const [k, v] of Object.entries(blueprint.docker.env)) {

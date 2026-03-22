@@ -5,15 +5,8 @@ import type {
   OpenClawGatewayConfig,
 } from "@pftypes/ProxySession.ts";
 import type { BlueprintRegistry } from "@core/BlueprintRegistry.ts";
-
-// ── Model Mapping ───────────────────────────────────────────────────
-// Maps PipelineForge model names to OpenClaw/Anthropic model identifiers.
-
-const MODEL_MAP: Readonly<Record<string, string>> = {
-  opus: "anthropic/claude-opus-4-6",
-  sonnet: "anthropic/claude-sonnet-4-6",
-  haiku: "anthropic/claude-haiku-4-5-20251001",
-};
+import { blueprintToAgentConfig } from "@core/BlueprintMountBuilder.ts";
+import type { WorkspaceDirs } from "@core/BlueprintMountBuilder.ts";
 
 // ── Proxy Config Generator ──────────────────────────────────────────
 // Transforms a PipelineForge DAG + blueprints into an openclaw.json

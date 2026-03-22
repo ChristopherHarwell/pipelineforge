@@ -115,7 +115,7 @@ export class OpenClawClient implements NotificationChannel {
         };
       }
 
-      await this.sleep(this.config.poll_interval_ms);
+      await sleep(this.config.poll_interval_ms);
     }
 
     throw new Error(

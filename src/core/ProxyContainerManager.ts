@@ -1,9 +1,8 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { ProxyContainerConfig } from "@pftypes/ProxySession.ts";
 import type { PipelineLogger } from "@pftypes/Logger.ts";
-
-const execFileAsync: typeof execFile.__promisify__ = promisify(execFile);
+import { execFileAsync } from "@utils/process.ts";
+import { sleep } from "@utils/process.ts";
+import { collectClaudeAuthEnv } from "@utils/openclaw-constants.ts";
 
 // ── Health Check Config ─────────────────────────────────────────────
 
@@ -137,19 +136,8 @@ export class ProxyContainerManager {
     // Forward Claude Code authentication env vars from host.
     // Claude Max uses OAuth credentials stored in ~/.claude/ (mounted above).
     // API key auth uses ANTHROPIC_API_KEY. Both paths are supported.
-    const CLAUDE_AUTH_VARS: ReadonlyArray<string> = [
-      "ANTHROPIC_API_KEY",
-      "CLAUDE_CODE_USE_BEDROCK",
-      "CLAUDE_CODE_USE_VERTEX",
-      "ANTHROPIC_AUTH_TOKEN",
-      "CLAUDE_API_KEY",
-    ];
-
-    for (const varName of CLAUDE_AUTH_VARS) {
-      const value: string | undefined = process.env[varName];
-      if (value !== undefined) {
-        args.push("--env", `${varName}=${value}`);
-      }
+    for (const entry of collectClaudeAuthEnv()) {
+      args.push("--env", entry);
     }
 
     args.push(this.config.openclawImage);

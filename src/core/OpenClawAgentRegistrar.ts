@@ -40,21 +40,32 @@ export interface RegisteredAgent {
 export class OpenClawAgentRegistrar {
   private readonly logger: PipelineLogger;
   private readonly workspaceBase: string;
-  private readonly sandbox: AgentSandboxConfig | null;
+  private readonly dockerConfig: DockerAgentConfig | null;
 
   /**
    * @param logger - Pipeline logger for status messages
    * @param workspaceBase - Base directory for agent workspaces (e.g., notes dir)
-   * @param sandbox - Docker sandbox config; when provided, agents run in containers
+   * @param dockerConfig - Docker config for containerized execution; passed
+   *   through to ProxySessionManager which wraps `openclaw agent` in `docker run`
    */
   constructor(
     logger: PipelineLogger,
     workspaceBase: string,
-    sandbox?: AgentSandboxConfig,
+    dockerConfig?: DockerAgentConfig,
   ) {
     this.logger = logger;
     this.workspaceBase = workspaceBase;
-    this.sandbox = sandbox ?? null;
+    this.dockerConfig = dockerConfig ?? null;
+  }
+
+  /**
+   * Get the Docker agent config (if provided). Used by the CLI to pass
+   * containerization settings through to ProxySessionManager.
+   *
+   * @returns Docker config or null if not containerized
+   */
+  getDockerConfig(): DockerAgentConfig | null {
+    return this.dockerConfig;
   }
 
   // ── Public API ────────────────────────────────────────────────────
@@ -182,15 +193,13 @@ export class OpenClawAgentRegistrar {
       ]);
 
       const parsed: unknown = JSON.parse(stdout);
-      if (parsed === null || typeof parsed !== "object") {
+      if (!isJsonObject(parsed)) {
         return false;
       }
 
-      const obj: Record<string, unknown> = parsed as Record<string, unknown>;
-
       // Check for discord key in chat object
-      if (obj["chat"] !== null && typeof obj["chat"] === "object") {
-        const chat: Record<string, unknown> = obj["chat"] as Record<string, unknown>;
+      const chat: Record<string, unknown> | undefined = getNestedObject(parsed, "chat");
+      if (chat !== undefined) {
         return "discord" in chat;
       }
 
@@ -220,13 +229,11 @@ export class OpenClawAgentRegistrar {
 
       if (Array.isArray(parsed)) {
         for (const entry of parsed) {
-          if (
-            entry !== null &&
-            typeof entry === "object" &&
-            "id" in entry &&
-            typeof (entry as Record<string, unknown>)["id"] === "string"
-          ) {
-            ids.add((entry as Record<string, unknown>)["id"] as string);
+          if (isJsonObject(entry)) {
+            const id: string | undefined = getStringField(entry, "id");
+            if (id !== undefined) {
+              ids.add(id);
+            }
           }
         }
       }
@@ -246,14 +253,7 @@ export class OpenClawAgentRegistrar {
    */
   private async addAgent(bp: Blueprint): Promise<RegisteredAgent> {
     const model: string = MODEL_MAP[bp.execution.model] ?? bp.execution.model;
-
-    // Repo-requiring agents get the repo dir as workspace;
-    // all others get the notes dir. OpenClaw's sandbox grants
-    // access to the workspace root automatically.
-    const workspace: string =
-      bp.requires_repo && this.sandbox !== null
-        ? this.sandbox.hostRepoDir
-        : this.workspaceBase;
+    const workspace: string = this.workspaceBase;
 
     const args: string[] = [
       "agents",
@@ -269,29 +269,28 @@ export class OpenClawAgentRegistrar {
 
     await execFileAsync(OPENCLAW_CLI, args);
 
-    // Apply Docker sandbox config via `openclaw config set`
-    let sandboxed: boolean = false;
-    if (this.sandbox !== null) {
-      sandboxed = await this.applySandboxConfig(bp);
-    }
+    // Ensure OpenClaw's own sandbox is OFF — PipelineForge manages
+    // containerization by wrapping `openclaw agent` in `docker run`
+    // with proper volume mounts (handled by ProxySessionManager).
+    await this.ensureSandboxOff(bp.name);
 
     return {
       agentId: bp.name,
       workspace,
       model,
-      sandboxed,
+      sandboxed: this.dockerConfig !== null,
     };
   }
 
-  // ── Sandbox Configuration ────────────────────────────────────────
-
   /**
-   * Find the index of an agent in the OpenClaw config list by ID.
+   * Ensure OpenClaw's built-in sandbox is disabled for an agent.
+   * PipelineForge handles containerization directly via `docker run`
+   * so the agent inside the container has full filesystem access to
+   * the mounted volumes.
    *
-   * @param agentId - Agent ID to locate
-   * @returns Zero-based index in `agents.list`, or -1 if not found
+   * @param agentId - Agent whose sandbox to disable
    */
-  private async findAgentIndex(agentId: string): Promise<number> {
+  private async ensureSandboxOff(agentId: string): Promise<void> {
     try {
       const { stdout } = await execFileAsync(OPENCLAW_CLI, [
         "config",
@@ -301,77 +300,25 @@ export class OpenClawAgentRegistrar {
 
       const parsed: unknown = JSON.parse(stdout);
       if (!Array.isArray(parsed)) {
-        return -1;
+        return;
       }
 
       for (let i: number = 0; i < parsed.length; i++) {
         const entry: unknown = parsed[i];
-        if (
-          entry !== null &&
-          typeof entry === "object" &&
-          Object.hasOwn(entry as object, "id") &&
-          (entry as Record<string, unknown>)["id"] === agentId
-        ) {
-          return i;
+        if (isJsonObject(entry) && getStringField(entry, "id") === agentId) {
+          // Unset any previous sandbox config
+          try {
+            await execFileAsync(OPENCLAW_CLI, [
+              "config", "unset", `agents.list.${String(i)}.sandbox`,
+            ]);
+          } catch {
+            // May not exist — that's fine
+          }
+          return;
         }
       }
     } catch {
-      // Config read failed
-    }
-
-    return -1;
-  }
-
-  /**
-   * Apply Docker sandbox configuration to a registered agent via
-   * `openclaw config set`. Sets sandbox.mode and docker.image on
-   * the agent entry in ~/.openclaw/openclaw.json.
-   *
-   * OpenClaw's sandbox automatically grants access to the agent's
-   * workspace root and sandbox directory. Credentials are inherited
-   * via auth-profiles from the main agent — no custom bind mounts
-   * are needed (and would be rejected by sandbox security if the
-   * source is outside allowed roots).
-   *
-   * @param bp - Blueprint whose agent should be sandboxed
-   * @returns true if sandbox config was applied successfully
-   */
-  private async applySandboxConfig(bp: Blueprint): Promise<boolean> {
-    if (this.sandbox === null) {
-      return false;
-    }
-
-    const idx: number = await this.findAgentIndex(bp.name);
-    if (idx < 0) {
-      this.logger.pipelineEvent(
-        "warn",
-        `Could not find agent ${bp.name} in config — sandbox not applied`,
-      );
-      return false;
-    }
-
-    const prefix: string = `agents.list.${String(idx)}`;
-
-    try {
-      // Set sandbox mode to "all" — sandbox every command the agent runs
-      await execFileAsync(OPENCLAW_CLI, [
-        "config", "set", `${prefix}.sandbox.mode`, '"all"',
-      ]);
-
-      // Set Docker image for the sandbox container
-      await execFileAsync(OPENCLAW_CLI, [
-        "config", "set", `${prefix}.sandbox.docker.image`,
-        JSON.stringify(this.sandbox.workerImage),
-      ]);
-
-      return true;
-    } catch (err: unknown) {
-      const message: string = err instanceof Error ? err.message : "Unknown error";
-      this.logger.pipelineEvent(
-        "warn",
-        `Failed to apply sandbox config for ${bp.name}: ${message}`,
-      );
-      return false;
+      // Config read failed — sandbox may not be set
     }
   }
 

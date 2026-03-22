@@ -8,29 +8,27 @@ import type { SessionId, SessionCompletionResult } from "@pftypes/ProxySession.t
 import { toSessionId } from "@pftypes/ProxySession.ts";
 import type { PipelineLogger } from "@pftypes/Logger.ts";
 import type { VoidPromise } from "@pftypes/TypeUtils.ts";
-
-const execFileAsync: typeof execFile.__promisify__ = promisify(execFile);
+import type { DockerAgentConfig } from "@core/OpenClawAgentRegistrar.ts";
+import { execFileAsync, sleep } from "@utils/process.ts";
+import { OPENCLAW_CLI, collectClaudeAuthEnv } from "@utils/openclaw-constants.ts";
+import { isJsonObject, getStringField, getNestedObject } from "@utils/json-guards.ts";
 
 // ── Poll Config ─────────────────────────────────────────────────────
 
 const DEFAULT_POLL_INTERVAL_MS: number = 5_000;
-const OPENCLAW_CLI: string = "openclaw";
 
 // ── Proxy Session Manager ───────────────────────────────────────────
-// Implements ExecutionBackend by spawning OpenClaw agent sessions via
-// the `openclaw` CLI subprocess. The CLI handles the WebSocket gateway
-// protocol internally, avoiding the need to implement the cryptographic
-// device identity handshake.
-//
-// Communication flow:
-//   openclaw agent --agent <name> -m "<prompt>" --json  → session + output
-//   openclaw agent --session-id <id> -m "<text>" --json → follow-up message
-//   openclaw sessions --agent <name> --json             → session list + status
+// Implements ExecutionBackend by spawning OpenClaw agent sessions.
+// When a DockerAgentConfig is provided, each `openclaw agent` call
+// runs inside a `docker run` container with proper volume mounts
+// (notes, repo, state, claude credentials, openclaw config).
+// When no docker config is given, agents run directly on the host.
 
 export class ProxySessionManager implements StreamingExecutionBackend {
   readonly supportsStreaming: true = true;
   private readonly logger: PipelineLogger;
   private readonly pollIntervalMs: number;
+  private readonly dockerConfig: DockerAgentConfig | null;
   private readonly activeSessions: Map<string, SessionId> = new Map();
   private readonly activeProcesses: Map<string, ChildProcess> = new Map();
 
@@ -66,19 +64,19 @@ export class ProxySessionManager implements StreamingExecutionBackend {
       `Spawning proxy session for ${agentName}...`,
     );
 
-    // ── Run agent via CLI ────────────────────────────────────────
+    // ── Run agent via CLI (optionally inside Docker) ─────────────
     // `openclaw agent --json` is a blocking command — it runs the
-    // full agent and returns a completion JSON. If the response
-    // already contains the result, return it directly instead of
-    // polling for a session that has already finished.
-    const { stdout } = await execFileAsync(OPENCLAW_CLI, [
+    // full agent and returns a completion JSON. When dockerConfig is
+    // set, the command runs inside a container with proper mounts.
+    const [cmd, cmdArgs] = this.buildCommand([
       "agent",
       "--agent",
       agentName,
       "-m",
       prompt,
       "--json",
-    ], { timeout: timeoutMs });
+    ]);
+    const { stdout } = await execFileAsync(cmd, [...cmdArgs], { timeout: timeoutMs });
 
     const durationMs: number = Date.now() - startTime;
 
@@ -352,23 +350,16 @@ export class ProxySessionManager implements StreamingExecutionBackend {
     // Array of sessions — find ours
     const sessions: ReadonlyArray<unknown> = parsed as ReadonlyArray<unknown>;
     for (const session of sessions) {
-      if (
-        session !== null &&
-        typeof session === "object" &&
-        "id" in session &&
-        (session as Record<string, unknown>)["id"] === String(sessionId)
-      ) {
-        return this.parseSessionResult(session, sessionId, startTime);
-      }
+      if (isJsonObject(session)) {
+        const id: string | undefined = getStringField(session, "id");
+        if (id === String(sessionId)) {
+          return this.parseSessionResult(session, sessionId, startTime);
+        }
 
-      // Also check sessionId field
-      if (
-        session !== null &&
-        typeof session === "object" &&
-        "sessionId" in session &&
-        (session as Record<string, unknown>)["sessionId"] === String(sessionId)
-      ) {
-        return this.parseSessionResult(session, sessionId, startTime);
+        const sessId: string | undefined = getStringField(session, "sessionId");
+        if (sessId === String(sessionId)) {
+          return this.parseSessionResult(session, sessionId, startTime);
+        }
       }
     }
 
